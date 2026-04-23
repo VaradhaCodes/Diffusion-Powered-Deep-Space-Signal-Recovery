@@ -35,3 +35,6 @@ Thumbs.db
 *.log
 *.tmp
 .claude
+CLAUDE.md
+PHASE*.md
+PROMPT*.md
