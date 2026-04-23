@@ -1,0 +1,7 @@
+Seeds              : [0, 1, 2]
+  s0 BER         : 2.924%
+  s1 BER         : 2.929%
+  s2 BER         : 3.026%
+Ensemble BER       : 2.566%
+Zhu paper BER      : 3.12%
+Results saved      : /home/itsva/deepspace_v5/results/baseline_ensemble_test.csv
