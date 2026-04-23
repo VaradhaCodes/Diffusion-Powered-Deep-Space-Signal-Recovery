@@ -1,0 +1,7 @@
+Checkpoint         : checkpoints/baseline_ep17.pt
+Test set           : 700/condition × 6 = 4200 (matches paper)
+Our overall BER    : 0.0312
+Our overall MSE    : 0.0277
+Soft gate BER<5% : YES
+Trend AWGN<KB2     : YES
+SOFT GATE          : PASS

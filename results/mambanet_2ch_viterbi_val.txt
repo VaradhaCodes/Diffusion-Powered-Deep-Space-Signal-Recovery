@@ -1,0 +1,7 @@
+Viterbi/CRF post-processor gating (val set)
+
+  no post-proc  : 3.752%
+  viterbi post  : 3.752%
+  crf post      : 3.761%
+
+Selected: none

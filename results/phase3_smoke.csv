@@ -1,0 +1,7 @@
+metric,value
+n_params,336530
+film_delta,0.114895
+loss_step1,0.763354
+loss_step5,0.710285
+ssm_fp32_ok,1
+all_grads_ok,1

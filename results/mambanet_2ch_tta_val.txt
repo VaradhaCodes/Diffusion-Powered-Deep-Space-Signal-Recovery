@@ -1,0 +1,8 @@
+TTA gating on Zhu test conditions (first 300/condition)
+
+  baseline (no TTA)              BER=3.752%
+  +time_reversal                 BER=23.249%
+  +symbol_shift(±1sym)           BER=4.775%
+  +both                          BER=5.029%
+
+Selected: time_reversal=False  symbol_shift=False

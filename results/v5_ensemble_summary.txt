@@ -1,0 +1,12 @@
+Ensemble checkpoints: ['v5_s0_ft_best.pt', 'v5_s1_ft_best.pt', 'v5_s2_ft_best.pt']
+Baseline BER : 3.12%
+Ensemble BER : 2.759%
+Delta        : -0.361pp
+Verdict      : BEATS baseline
+
+  Awgn_Tb0d3                1.330%
+  Awgn_Tb0d5                1.311%
+  kb2_Tb0d3_m1d2            2.483%
+  kb2_Tb0d3_m1d4            4.813%
+  kb2_Tb0d5_m1d2            2.151%
+  kb2_Tb0d5_m1d4            4.463%

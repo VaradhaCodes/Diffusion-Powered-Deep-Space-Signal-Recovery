@@ -1,0 +1,14 @@
+Checkpoints    : ['mambanet_2ch_s0_ft_best.pt', 'mambanet_2ch_s1_ft_best.pt', 'mambanet_2ch_s2_ft_best.pt']
+TTA config     : time_reversal=False  symbol_shift=False
+Baseline BER   : 3.12%
+Prev best (no TTA): 2.274%
+TTA+ensemble   : 2.275%
+Delta vs no-TTA: +0.001pp
+Delta vs Zhu   : -0.845pp  → BEATS
+
+  Awgn_Tb0d3                1.044%
+  Awgn_Tb0d5                1.197%
+  kb2_Tb0d3_m1d2            1.864%
+  kb2_Tb0d3_m1d4            3.810%
+  kb2_Tb0d5_m1d2            1.874%
+  kb2_Tb0d5_m1d4            3.860%

@@ -1,0 +1,35 @@
+check,status,detail
+train+val split sum,PASS,got 42000
+train size ~33600,PASS,33600
+val size ~8400,PASS,8400
+"x shape (2,800)",PASS,"torch.Size([2, 800])"
+"y shape (100,)",PASS,torch.Size([100])
+x dtype float32,PASS,torch.float32
+y dtype float32,PASS,torch.float32
+y values binary,PASS,
+"batch x shape (4,2,800)",PASS,"torch.Size([4, 2, 800])"
+"batch y shape (4,100)",PASS,"torch.Size([4, 100])"
+test total == 8400,PASS,8400
+test Awgn_Tb0d3 == 1400,PASS,1400
+test Awgn_Tb0d5 == 1400,PASS,1400
+test kb2_Tb0d3_m1d2 == 1400,PASS,1400
+test kb2_Tb0d3_m1d4 == 1400,PASS,1400
+test kb2_Tb0d5_m1d2 == 1400,PASS,1400
+test kb2_Tb0d5_m1d4 == 1400,PASS,1400
+"test x shape (2,800)",PASS,
+"test y shape (100,)",PASS,
+synth len == 1000,PASS,
+"synth x shape (2,800)",PASS,"torch.Size([2, 800])"
+"synth y shape (100,)",PASS,torch.Size([100])
+synth y binary,PASS,
+snr in range,PASS,17.6 dB
+snr min > -4,PASS,min=-2.98
+snr max < 21,PASS,max=19.98
+E[|h|²] ≈ b²=4.0 (m=1.2),PASS,got 3.999 (err 0.0%)
+E[|h|²] ≈ b²=4.0 (m=1.4),PASS,got 3.984 (err 0.4%)
+N0 calibration at -2dB (rel_err<5%),PASS,err=0.1%
+N0 calibration at +4dB (rel_err<5%),PASS,err=0.2%
+N0 calibration at +10dB (rel_err<5%),PASS,err=0.0%
+N0 calibration at +16dB (rel_err<5%),PASS,err=0.3%
+GMSK constant-envelope,PASS,verified in loop above
+gen rate > 50 samples/s,PASS,14996 sps
