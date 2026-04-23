@@ -33,8 +33,53 @@ from src.models.v5_model import v5_loss, _SNR_MIN, _SNR_RANGE
 from src.data_zhu import zhu_train_dataset, zhu_test_dataset, TEST_CONDITIONS
 from src.train.train_v5 import (
     _calibrate_snr_estimator, estimate_snr, _preload_zhu,
-    _norm_snr, _run, _save, _load,
+    _norm_snr, _save, _load,
 )
+
+NEURAL_CKPT = ROOT / "checkpoints" / "v6b2_snr_estimator.pt"
+
+
+def _run(model, loader, opt, train: bool, slope, intercept,
+         synth_snr=True, snr_fn=None, gt_snr_tensor=None):
+    """One epoch. snr_fn overrides linear estimator when provided."""
+    model.train(train)
+    tot_loss = tot_bce = tot_ber = n = 0
+    with torch.set_grad_enabled(train):
+        for batch in loader:
+            DEVICE = next(model.parameters()).device
+            if synth_snr and len(batch) == 3:
+                x, y, snr = batch
+                snr = snr.to(DEVICE)
+            else:
+                x, y = batch[0], batch[1]
+                snr = None
+            x, y = x.to(DEVICE), y.to(DEVICE)
+
+            if snr is None:
+                if snr_fn is not None:
+                    snr = snr_fn(x)
+                else:
+                    snr = estimate_snr(x, slope, intercept)
+
+            with torch.autocast("cuda", dtype=torch.bfloat16, enabled=(DEVICE.type == "cuda")):
+                logits, snr_pred = model(x, snr)
+            snr_norm = _norm_snr(snr)
+            loss, ld = v5_loss(logits.float(), y, snr_pred.float(), snr_norm)
+
+            if train:
+                opt.zero_grad()
+                loss.backward()
+                nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                opt.step()
+
+            B = len(x)
+            tot_loss += loss.item() * B
+            tot_bce  += ld["bce"] * B
+            ber = ((torch.sigmoid(logits.float().detach()) > 0.5).float() != y).float().mean().item()
+            tot_ber  += ber * B
+            n += B
+
+    return tot_loss / n, tot_bce / n, tot_ber / n
 
 DEVICE     = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 CKPT_DIR   = ROOT / "checkpoints"
@@ -59,6 +104,9 @@ def main():
     ap.add_argument("--finetune-lr",     type=float, default=3e-4)
     ap.add_argument("--skip-pretrain",   action="store_true")
     ap.add_argument("--resume",          type=str,   default=None)
+    ap.add_argument("--snr-source",      type=str,   default="linear",
+                    choices=["gt", "linear", "neural"],
+                    help="gt=ground truth (oracle), linear=V5 power estimator, neural=v6b2 neural")
     args = ap.parse_args()
 
     torch.manual_seed(args.seed)
@@ -71,11 +119,23 @@ def main():
     log_w.writerow(["phase","epoch","train_loss","train_bce","train_ber",
                     "val_loss","val_bce","val_ber","lr","elapsed_s"])
 
-    print(f"\n=== Phase 5 — {args.model} seed={args.seed} | {DEVICE} ===")
+    print(f"\n=== Phase 5 — {args.model} seed={args.seed} snr_source={args.snr_source} | {DEVICE} ===")
 
     # ── SNR estimator ────────────────────────────────────────────────────────
-    print("\nCalibrating SNR estimator ...")
-    slope, intercept = _calibrate_snr_estimator()
+    snr_fn = None   # None → use linear slope/intercept (default / backward compat)
+    if args.snr_source == "neural":
+        from src.infer.snr_helper import estimate_snr_db as _neural_snr
+        _ckpt = NEURAL_CKPT
+        snr_fn = lambda x: _neural_snr(x, _ckpt, DEVICE).clamp(_SNR_MIN, _SNR_MIN + _SNR_RANGE)
+        slope, intercept = 0.0, 0.0   # unused when snr_fn is set
+        print(f"Neural SNR estimator: {_ckpt}")
+    elif args.snr_source == "gt":
+        # Ground truth used only when synth_snr=True; for Zhu data we fall back to linear
+        slope, intercept = _calibrate_snr_estimator()
+        print("SNR source: gt (oracle — uses dataset label for synth, linear for Zhu)")
+    else:
+        print("\nCalibrating SNR estimator ...")
+        slope, intercept = _calibrate_snr_estimator()
 
     # ── Zhu data ─────────────────────────────────────────────────────────────
     print("\nPre-loading Zhu data ...")
@@ -114,8 +174,8 @@ def main():
 
         for ep in range(start_ep + 1, args.pretrain_epochs + 1):
             t0  = time.time()
-            tr  = _run(model, synth_loader, opt_pre, True,  slope, intercept, synth_snr=True)
-            val = _run(model, val_loader,   None,    False, slope, intercept, synth_snr=False)
+            tr  = _run(model, synth_loader, opt_pre, True,  slope, intercept, synth_snr=True,  snr_fn=snr_fn)
+            val = _run(model, val_loader,   None,    False, slope, intercept, synth_snr=False, snr_fn=snr_fn)
             sched_pre.step()
             lr  = opt_pre.param_groups[0]["lr"]
             elapsed = time.time() - t0
@@ -150,8 +210,8 @@ def main():
     best_ber_ft, best_ft = 1.0, None
     for ep in range(1, args.finetune_epochs + 1):
         t0  = time.time()
-        tr  = _run(model, ft_loader,  opt_ft, True,  slope, intercept, synth_snr=False)
-        val = _run(model, val_loader, None,   False, slope, intercept, synth_snr=False)
+        tr  = _run(model, ft_loader,  opt_ft, True,  slope, intercept, synth_snr=False, snr_fn=snr_fn)
+        val = _run(model, val_loader, None,   False, slope, intercept, synth_snr=False, snr_fn=snr_fn)
         sched_ft.step()
         lr  = opt_ft.param_groups[0]["lr"]
         elapsed = time.time() - t0
@@ -187,7 +247,10 @@ def main():
         with torch.no_grad():
             for x, y in tl:
                 x, y = x.to(DEVICE), y.to(DEVICE)
-                snr  = estimate_snr(x, slope, intercept)
+                if snr_fn is not None:
+                    snr = snr_fn(x)
+                else:
+                    snr = estimate_snr(x, slope, intercept)
                 with torch.autocast("cuda", dtype=torch.bfloat16, enabled=(DEVICE.type == "cuda")):
                     logits, _ = model(x, snr)
                 ber = ((torch.sigmoid(logits.float()) > 0.5).float() != y).float().mean().item()
