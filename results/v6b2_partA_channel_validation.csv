@@ -1,0 +1,37 @@
+check,config_m,config_bt,metric,theoretical,empirical,rel_error_pct,pass_fail,reference
+A1_pdf,1.2,0.3,rel_err_pct_10th,0.387025,0.375979,2.85,PASS,"Jao 1984, Eq.(4); DOI:10.1109/TVT.1984.23517"
+A1_pdf,1.2,0.3,rel_err_pct_50th,0.378342,0.386784,2.23,PASS,"Jao 1984, Eq.(4); DOI:10.1109/TVT.1984.23517"
+A1_pdf,1.2,0.3,rel_err_pct_90th,0.089988,0.089943,0.05,PASS,"Jao 1984, Eq.(4); DOI:10.1109/TVT.1984.23517"
+A2_second_moment,1.2,0.3,E[|h|^2],4.0,4.016853,0.4213,PASS,"Jao 1984, Eq.(5); E[|h|^2]=b^2"
+A3_fourth_moment_ratio,1.2,0.3,E[|h|^4]/E[|h|^2]^2,3.666667,3.691817,0.6859,PASS,"Jao 1984, Eq.(5): E[|h|^4]=b^4*(alpha+1)/alpha"
+A4_acf_lag1,1.2,0.3,ACF_lag1,0.0,0.002161,nan,OBS,Observational — i.i.d. per frame → should be ~0
+A4_acf_lag10,1.2,0.3,ACF_lag10,0.0,-0.007263,nan,OBS,Observational — i.i.d. per frame → should be ~0
+A4_acf_lag100,1.2,0.3,ACF_lag100,0.0,-0.009885,nan,OBS,Observational — i.i.d. per frame → should be ~0
+A4_acf_lag400,1.2,0.3,ACF_lag400,0.0,-0.001506,nan,OBS,Observational — i.i.d. per frame → should be ~0
+A1_pdf,1.2,0.5,rel_err_pct_10th,0.387025,0.375979,2.85,PASS,"Jao 1984, Eq.(4); DOI:10.1109/TVT.1984.23517"
+A1_pdf,1.2,0.5,rel_err_pct_50th,0.378342,0.386784,2.23,PASS,"Jao 1984, Eq.(4); DOI:10.1109/TVT.1984.23517"
+A1_pdf,1.2,0.5,rel_err_pct_90th,0.089988,0.089943,0.05,PASS,"Jao 1984, Eq.(4); DOI:10.1109/TVT.1984.23517"
+A2_second_moment,1.2,0.5,E[|h|^2],4.0,4.016853,0.4213,PASS,"Jao 1984, Eq.(5); E[|h|^2]=b^2"
+A3_fourth_moment_ratio,1.2,0.5,E[|h|^4]/E[|h|^2]^2,3.666667,3.691817,0.6859,PASS,"Jao 1984, Eq.(5): E[|h|^4]=b^4*(alpha+1)/alpha"
+A4_acf_lag1,1.2,0.5,ACF_lag1,0.0,0.002161,nan,OBS,Observational — i.i.d. per frame → should be ~0
+A4_acf_lag10,1.2,0.5,ACF_lag10,0.0,-0.007263,nan,OBS,Observational — i.i.d. per frame → should be ~0
+A4_acf_lag100,1.2,0.5,ACF_lag100,0.0,-0.009885,nan,OBS,Observational — i.i.d. per frame → should be ~0
+A4_acf_lag400,1.2,0.5,ACF_lag400,0.0,-0.001506,nan,OBS,Observational — i.i.d. per frame → should be ~0
+A1_pdf,1.4,0.3,rel_err_pct_10th,0.392722,0.387139,1.42,PASS,"Jao 1984, Eq.(4); DOI:10.1109/TVT.1984.23517"
+A1_pdf,1.4,0.3,rel_err_pct_50th,0.39487,0.405535,2.7,PASS,"Jao 1984, Eq.(4); DOI:10.1109/TVT.1984.23517"
+A1_pdf,1.4,0.3,rel_err_pct_90th,0.097631,0.100886,3.33,PASS,"Jao 1984, Eq.(4); DOI:10.1109/TVT.1984.23517"
+A2_second_moment,1.4,0.3,E[|h|^2],4.0,3.971432,0.7142,PASS,"Jao 1984, Eq.(5); E[|h|^2]=b^2"
+A3_fourth_moment_ratio,1.4,0.3,E[|h|^4]/E[|h|^2]^2,3.428571,3.470827,1.2325,PASS,"Jao 1984, Eq.(5): E[|h|^4]=b^4*(alpha+1)/alpha"
+A4_acf_lag1,1.4,0.3,ACF_lag1,0.0,0.024012,nan,OBS,Observational — i.i.d. per frame → should be ~0
+A4_acf_lag10,1.4,0.3,ACF_lag10,0.0,0.01319,nan,OBS,Observational — i.i.d. per frame → should be ~0
+A4_acf_lag100,1.4,0.3,ACF_lag100,0.0,-0.001405,nan,OBS,Observational — i.i.d. per frame → should be ~0
+A4_acf_lag400,1.4,0.3,ACF_lag400,0.0,0.000806,nan,OBS,Observational — i.i.d. per frame → should be ~0
+A1_pdf,1.4,0.5,rel_err_pct_10th,0.392722,0.387139,1.42,PASS,"Jao 1984, Eq.(4); DOI:10.1109/TVT.1984.23517"
+A1_pdf,1.4,0.5,rel_err_pct_50th,0.39487,0.405535,2.7,PASS,"Jao 1984, Eq.(4); DOI:10.1109/TVT.1984.23517"
+A1_pdf,1.4,0.5,rel_err_pct_90th,0.097631,0.100886,3.33,PASS,"Jao 1984, Eq.(4); DOI:10.1109/TVT.1984.23517"
+A2_second_moment,1.4,0.5,E[|h|^2],4.0,3.971432,0.7142,PASS,"Jao 1984, Eq.(5); E[|h|^2]=b^2"
+A3_fourth_moment_ratio,1.4,0.5,E[|h|^4]/E[|h|^2]^2,3.428571,3.470827,1.2325,PASS,"Jao 1984, Eq.(5): E[|h|^4]=b^4*(alpha+1)/alpha"
+A4_acf_lag1,1.4,0.5,ACF_lag1,0.0,0.024012,nan,OBS,Observational — i.i.d. per frame → should be ~0
+A4_acf_lag10,1.4,0.5,ACF_lag10,0.0,0.01319,nan,OBS,Observational — i.i.d. per frame → should be ~0
+A4_acf_lag100,1.4,0.5,ACF_lag100,0.0,-0.001405,nan,OBS,Observational — i.i.d. per frame → should be ~0
+A4_acf_lag400,1.4,0.5,ACF_lag400,0.0,0.000806,nan,OBS,Observational — i.i.d. per frame → should be ~0
