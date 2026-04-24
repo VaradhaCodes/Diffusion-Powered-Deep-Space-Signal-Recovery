@@ -27,6 +27,7 @@ from src.data_zhu import zhu_train_dataset, zhu_test_dataset, TEST_CONDITIONS
 from src.train.train_v5 import (
     _calibrate_snr_estimator, estimate_snr, _preload_zhu, _norm_snr,
 )
+from src.synth_gen import SynthDataset
 
 DEVICE     = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 CKPT_DIR   = ROOT / "checkpoints"
@@ -158,13 +159,24 @@ def run_epoch(model, loader, opt, sched_step_fn,
 
 # ── Pretrain ───────────────────────────────────────────────────────────────
 
+# Fixed 50K synthetic val set used for pretrain early stopping across all runs.
+# Separate from the training corpus so it's never seen during training.
+# Seed is fixed so the signal is consistent across corpus sizes and seeds.
+_SYNTH_VAL_SEED = 999_999_999
+_SYNTH_VAL_N    = 50_000
+
+
 def pretrain(size_label: str, seed: int, snr_source: str = "linear") -> float:
     """Pretrain mambanet_2ch from random init on synthetic corpus.
 
-    Returns best val BER achieved.
+    Early stops on synthetic val loss (same distribution as training).
+    Zhu val BER is also logged each epoch for reference only.
+
+    Returns converged epoch count (int) — sweep uses this; actual best
+    checkpoint is saved to checkpoints/v6b3_pre_<size>_s<seed>.pt.
     """
     set_seed(seed)
-    data_dir = DATA_B3 / size_label
+    data_dir  = DATA_B3 / size_label
     n_samples = SIZE_MAP[size_label]
     use_mmap  = n_samples >= 2_000_000
 
@@ -172,10 +184,9 @@ def pretrain(size_label: str, seed: int, snr_source: str = "linear") -> float:
     print(f"[{ts()}] PRETRAIN  size={size_label}  seed={seed}  snr={snr_source}  {DEVICE}")
     print(f"{'='*70}")
 
-    # SNR estimator calibration
     slope, intercept = _calibrate_snr_estimator()
 
-    # Synthetic data
+    # Training corpus (full N samples from disk)
     synth_ds = SynthNpyDataset(data_dir, mmap=use_mmap)
     g = torch.Generator(); g.manual_seed(seed)
     synth_loader = DataLoader(
@@ -184,14 +195,25 @@ def pretrain(size_label: str, seed: int, snr_source: str = "linear") -> float:
         generator=g, worker_init_fn=worker_init_fn,
     )
 
-    # Zhu validation data
+    # Synthetic val set — fixed seed, never in training corpus
+    print(f"  Building synth val set (N={_SYNTH_VAL_N}, seed={_SYNTH_VAL_SEED}) ...")
+    synth_val_ds = SynthDataset(
+        n_samples=_SYNTH_VAL_N, channel="mixed",
+        snr_range=(_SNR_MIN, _SNR_MIN + _SNR_RANGE),
+        seed=_SYNTH_VAL_SEED,
+    )
+    synth_val_loader = DataLoader(synth_val_ds, batch_size=PRE_BATCH,
+                                  shuffle=False, num_workers=2, pin_memory=True)
+
+    # Zhu val — logged each epoch but NOT used for early stopping
     _, zhu_val_raw = zhu_train_dataset(val_frac=0.111, seed=seed)
     zhu_val = _preload_zhu(zhu_val_raw, "Zhu-val")
-    val_loader = DataLoader(zhu_val, batch_size=PRE_BATCH, shuffle=False, pin_memory=True)
+    zhu_val_loader = DataLoader(zhu_val, batch_size=PRE_BATCH,
+                                shuffle=False, pin_memory=True)
 
     model = build_model("mambanet_2ch").to(DEVICE)
     n_params = sum(p.numel() for p in model.parameters())
-    print(f"  mambanet_2ch  params={n_params:,}  data={n_samples:,}  mmap={use_mmap}")
+    print(f"  mambanet_2ch  params={n_params:,}  corpus={n_samples:,}  mmap={use_mmap}")
 
     opt = torch.optim.AdamW(model.parameters(), lr=PRE_LR, weight_decay=1e-4)
     steps_per_epoch = math.ceil(n_samples / PRE_BATCH)
@@ -201,27 +223,29 @@ def pretrain(size_label: str, seed: int, snr_source: str = "linear") -> float:
     log_path = RESULT_DIR / f"v6b3_pre_{size_label}_s{seed}_log.csv"
     log_fh   = open(log_path, "w", newline="")
     log_w    = csv.writer(log_fh)
-    log_w.writerow(["epoch", "steps", "train_loss", "val_ber", "lr", "elapsed_s"])
+    log_w.writerow(["epoch", "steps", "train_loss", "synth_val_loss",
+                    "synth_val_ber", "zhu_val_ber", "lr", "elapsed_s"])
 
-    best_ber = float("inf")
-    patience_ctr = 0
-    global_step  = 0
-    best_ckpt    = None
+    best_synth_loss = float("inf")
+    patience_ctr    = 0
+    global_step     = 0
+    best_ckpt       = None
+    conv_ep         = 0
 
     for ep in range(1, PRE_MAX_EPOCHS + 1):
         t0 = time.time()
 
-        # --- train ---
+        # --- train one epoch ---
         model.train()
         tot_loss = n = 0
         for batch in synth_loader:
-            x, y = batch[0].to(DEVICE), batch[1].to(DEVICE)
-            snr  = batch[2].to(DEVICE)   # GT SNR from synthetic data
+            x, y  = batch[0].to(DEVICE), batch[1].to(DEVICE)
+            snr   = batch[2].to(DEVICE)          # GT SNR from synthetic data
 
             with torch.autocast("cuda", dtype=torch.bfloat16, enabled=(DEVICE.type == "cuda")):
                 logits, snr_pred = model(x, snr)
             snr_norm = _norm_snr(snr)
-            loss, _ = v5_loss(logits.float(), y, snr_pred.float(), snr_norm)
+            loss, _  = v5_loss(logits.float(), y, snr_pred.float(), snr_norm)
 
             opt.zero_grad()
             loss.backward()
@@ -233,7 +257,6 @@ def pretrain(size_label: str, seed: int, snr_source: str = "linear") -> float:
             tot_loss += loss.item() * len(x)
             n        += len(x)
 
-            # Step-level checkpoint
             if global_step % 5000 == 0:
                 step_k = global_step // 1000
                 p = CKPT_DIR / f"v6b3_pre_{size_label}_step{step_k}k_s{seed}.pt"
@@ -241,25 +264,37 @@ def pretrain(size_label: str, seed: int, snr_source: str = "linear") -> float:
 
         train_loss = tot_loss / n
 
-        # --- val ---
-        _, val_ber = run_epoch(model, val_loader, None, None,
-                               slope, intercept, is_train=False, use_gt_snr=False)
+        # --- synthetic val (early-stop signal) ---
+        synth_val_loss, synth_val_ber = run_epoch(
+            model, synth_val_loader, None, None,
+            slope, intercept, is_train=False, use_gt_snr=True)
+
+        # --- Zhu val (reference only) ---
+        _, zhu_val_ber = run_epoch(
+            model, zhu_val_loader, None, None,
+            slope, intercept, is_train=False, use_gt_snr=False)
 
         lr      = opt.param_groups[0]["lr"]
         elapsed = time.time() - t0
+        conv_ep = ep
         print(f"[{ts()}] epoch={ep:02d} steps={global_step} "
-              f"train_loss={train_loss:.4f} val_ber={val_ber:.4f} lr={lr:.2e} {elapsed:.0f}s")
-        log_w.writerow([ep, global_step, round(train_loss, 6), round(val_ber, 6),
+              f"tr_loss={train_loss:.4f} sv_loss={synth_val_loss:.4f} "
+              f"sv_ber={synth_val_ber:.4f} zhu_ber={zhu_val_ber:.4f} "
+              f"lr={lr:.2e} {elapsed:.0f}s")
+        log_w.writerow([ep, global_step,
+                        round(train_loss, 6), round(synth_val_loss, 6),
+                        round(synth_val_ber, 6), round(zhu_val_ber, 6),
                         f"{lr:.2e}", round(elapsed, 1)])
         log_fh.flush()
 
-        if val_ber < best_ber:
-            best_ber     = val_ber
-            patience_ctr = 0
-            best_ckpt    = CKPT_DIR / f"v6b3_pre_{size_label}_s{seed}.pt"
-            torch.save({"model": model.state_dict(), "val_ber": best_ber,
+        # Early stop on synthetic val loss
+        if synth_val_loss < best_synth_loss:
+            best_synth_loss = synth_val_loss
+            patience_ctr    = 0
+            best_ckpt       = CKPT_DIR / f"v6b3_pre_{size_label}_s{seed}.pt"
+            torch.save({"model": model.state_dict(), "val_loss": best_synth_loss,
                         "epoch": ep, "step": global_step}, best_ckpt)
-            print(f"  *** new best val_ber={best_ber:.4f}  → {best_ckpt.name}")
+            print(f"  *** new best synth_val_loss={best_synth_loss:.4f}  → {best_ckpt.name}")
         else:
             patience_ctr += 1
             print(f"  patience {patience_ctr}/{PRE_PATIENCE}")
@@ -268,8 +303,9 @@ def pretrain(size_label: str, seed: int, snr_source: str = "linear") -> float:
                 break
 
     log_fh.close()
-    print(f"  Pretrain done.  best_val_ber={best_ber:.4f}  converged_ep={ep}  ckpt={best_ckpt}")
-    return best_ber
+    print(f"  Pretrain done.  best_synth_val_loss={best_synth_loss:.4f}  "
+          f"converged_ep={conv_ep}  ckpt={best_ckpt}")
+    return conv_ep
 
 
 # ── Fine-tune ──────────────────────────────────────────────────────────────
