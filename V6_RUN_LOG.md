@@ -366,3 +366,53 @@ Power-law fit: skipped (only 1 data point).
 - checkpoints/v6b3_canonical_s2.pt       ← v6b3_500K_s2_ft.pt
 
 **V6B3_CANONICAL_BER = 2.2820%**
+
+---
+
+## Batch 3 — 1M run (2026-04-24, manual override of sweep-stop)
+
+**Rationale**: Sweep stopped at 500K because gain vs V5 baseline was -0.007pp. However, V5 pretrain used old synth_gen.py (no CLI, different chunking) so comparison wasn't clean. User decided to run 1M to get a real data point.
+
+### Pretrain summary
+| seed | conv_epoch | best_synth_val_loss |
+|------|-----------|---------------------|
+| 0    | 40 (hit max, no early stop) | 0.2204 |
+| 1    | 39 (early stop) | 0.2194 |
+
+1M pretrain reached lower loss than 500K (0.2204/0.2194 vs 0.2222/0.2218) — the model IS learning more from more data during pretrain.
+
+### Fine-tune summary
+| seed | conv_epoch | best_val_ber |
+|------|-----------|-------------|
+| 0    | 30 (hit max) | 0.1497 |
+| 1    | 27 (early stop) | 0.1448 |
+| 2    | 25 (early stop) | 0.1478 |
+
+### Per-seed test BER
+| seed | AWGN_Tb0d3 | AWGN_Tb0d5 | KB2_Tb0d3_m1d2 | KB2_Tb0d3_m1d4 | KB2_Tb0d5_m1d2 | KB2_Tb0d5_m1d4 | OVERALL |
+|------|-----------|-----------|---------------|---------------|---------------|---------------|---------|
+| 0    | 1.10%     | 1.19%     | 1.86%         | 3.75%         | 1.88%         | 3.93%         | 2.28%   |
+| 1    | 1.10%     | 1.14%     | 1.87%         | 3.70%         | 1.88%         | 3.89%         | 2.26%   |
+| 2    | 1.09%     | 1.14%     | 1.87%         | 3.76%         | 1.83%         | 3.86%         | 2.26%   |
+
+### 3-seed ensemble BER: 2.2692%
+
+### Sweep-level early stopping decision
+| Size | Ensemble BER | Gain vs previous |
+|------|-------------|-----------------|
+| V5 baseline | 2.2750% | — |
+| 500K | 2.2820% | -0.007pp (worse) |
+| 1M   | 2.2692% | +0.013pp vs 500K |
+
+Gain 500K→1M = 0.013pp < 0.05pp threshold → **SWEEP STOPPED**.
+Tiebreaker: 500K and 1M within 0.02pp → smaller size wins = **500K**.
+
+### BRUTAL HONESTY CLAUSE
+Range across all sizes: 2.2692% – 2.2820% = 0.013pp < 0.15pp.
+The curve is FLAT. **Data size is not the bottleneck.**
+More data does improve pretrain quality (lower synth_val_loss) but this does NOT translate to meaningful test BER improvement after Zhu fine-tune.
+Bottleneck is likely the fine-tune data size (only 37K samples) or architecture capacity.
+
+**Winner = 500K. V6B3_CANONICAL_BER = 2.2820%** (unchanged).
+
+Scaling curve updated with 2 data points → figures/v6b3_scaling_curve.png
