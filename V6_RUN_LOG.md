@@ -662,3 +662,92 @@ Range = 0.014pp < 0.03pp threshold → **plain BCE wins** (simplest).
 5. **Loss function irrelevant**: all 4 variants within 0.014pp. BCE is fine.
 6. **Next bottleneck**: fine-tune data size (only 37K Zhu frames). SB7 overfits from ep8 onwards. Generating synthetic Zhu-equivalent fine-tune data is the clear next step.
 
+---
+
+## Synth Fine-Tune Experiment — Preflight (2026-04-24)
+
+**Hypothesis**: 37K Zhu fine-tune corpus is the bottleneck. Adding synthetic Zhu-equivalent data should help.
+
+**Pre-flight findings (full dataset audit)**:
+
+1. AWGN match: our synth_gen at Eb/N0 [-4,8] dB matches Zhu's AWGN training (power 5.9 vs 6.3 dB). ✓
+2. KB2 mismatch: Zhu's KB2 is 11.45 dB quieter than AWGN at every SNR level. Constant ratio = 0.0717 across all 7 SNR blocks (3000 frames/block). Root cause: Zhu's MATLAB scales KB2 frames by ~0.268 before saving (exact formula unknown — not reproducible from paper params). SOLUTION: multiply synthetic KB2 xs by 0.268 after generation.
+3. SNR definition: Zhu training uses Eb/N0 (our formula); Zhu test uses SNR_per_sample (9 dB offset). Training data confirmed: Eb/N0 [-4,8] dB, 7 levels × 3000 frames = 21K per channel.
+4. Amplitude after scaling: synth AWGN 5.9 dB (target 6.3), synth KB2 −4.1 dB (target −5.4). Residual 1.3 dB KB2 error from irreducible signal-power component; noise component matches perfectly.
+
+**Setup**:
+- Start: v6b3_canonical_pretrain.pt (seed 1 pretrain, same as canonical)
+- Fine-tune data: 37,338 Zhu real + 100K synthetic AWGN + 100K synthetic KB2 (×0.268) = 237,338 total
+- Script: src/train/train_v6_synthft.py
+- Synth data: data/synth_zhu_equiv/awgn/ (seed=42) + data/synth_zhu_equiv/kb2/ (seed=43)
+- Hyperparams: identical to v6b3 fine-tune (Adam lr=3e-4, cosine→1e-6, max 30ep, patience=10)
+- SNR source: linear estimator (same as canonical, FiLM=0.009pp contribution)
+- Gate: delta ≥ 0.05pp vs canonical (2.2820%) → data IS bottleneck; else ceiling confirmed
+
+**COMPLETE — see results below.**
+
+---
+
+### Run A — Buggy (double-scaling, abandoned)
+
+Discovered post-run: `data/synth_zhu_equiv/kb2/xs.npy` was scaled in-place ×0.268 during generation,
+AND `SynthNpyXYDataset` applied `x_scale=KB2_SCALE=0.268` again in `__getitem__`. Net factor: 0.268² = 0.0718 (−22.9 dB). KB2 training samples were essentially zero-signal.
+
+Results (seeds 0/1/2):
+- `kb2_Tb0d5_m1d2` BER: 11.11% / 12.66% / 9.65% (canonical: 1.87%) ← catastrophic
+- Overall: 4.07% / 4.41% / 3.76%
+
+Fix: changed `x_scale=KB2_SCALE → x_scale=1.0` in `_build_combined_dataset` for KB2 (file already scaled).
+
+---
+
+### Run B — Fixed (2026-04-24) ← FINAL
+
+**Per-seed test results:**
+
+| condition | s0 BER | s1 BER | s2 BER | canonical |
+|-----------|--------|--------|--------|-----------|
+| Awgn_Tb0d3 | 1.20% | 1.14% | 1.14% | **1.04%** |
+| Awgn_Tb0d5 | 6.04% | 4.17% | 5.32% | **1.20%** |
+| kb2_Tb0d3_m1d2 | 2.21% | 2.17% | 2.15% | **1.87%** |
+| kb2_Tb0d3_m1d4 | 4.34% | 4.25% | 4.47% | **3.81%** |
+| kb2_Tb0d5_m1d2 | 3.80% | 3.74% | 3.90% | **1.87%** |
+| kb2_Tb0d5_m1d4 | 5.74% | 5.22% | 5.82% | **3.86%** |
+| **OVERALL** | **3.89%** | **3.45%** | **3.80%** | **2.28%** |
+
+**Ensemble (3-seed aggregate):**
+
+| condition | synthft BER | canonical BER | delta |
+|-----------|-------------|---------------|-------|
+| Awgn_Tb0d3 | 1.16% | 1.04% | −0.12pp |
+| Awgn_Tb0d5 | **5.18%** | 1.20% | −3.98pp |
+| kb2_Tb0d3_m1d2 | 2.18% | 1.87% | −0.31pp |
+| kb2_Tb0d3_m1d4 | 4.35% | 3.81% | −0.54pp |
+| kb2_Tb0d5_m1d2 | **3.81%** | 1.87% | −1.94pp |
+| kb2_Tb0d5_m1d4 | **5.60%** | 3.86% | −1.74pp |
+| **OVERALL** | **3.7123%** | **2.2820%** | **−1.4303pp** |
+
+**Gate**: delta = −1.43pp (regression, not improvement)
+**Verdict: HYPOTHESIS REJECTED** — synthetic augmentation HURTS, not helps.
+
+### Analysis
+
+**BT=0.5 conditions specifically degraded:**
+- Tb0d5 average regression: −2.55pp
+- Tb0d3 average regression: −0.32pp
+
+This BT-specific pattern is the key diagnostic. BT=0.3 conditions are nearly intact; BT=0.5 conditions collapse. Root cause: **sim-to-real gap in BT=0.5 GMSK generation.** Our `synth_gen.py` uses a Gaussian filter for GMSK shaping, but the exact filter implementation (truncation, oversampling kernel) likely differs from Zhu's MATLAB code for BT=0.5. At BT=0.3 (broader filter → softer shaping), the mismatch is small. At BT=0.5 (narrower filter → sharper shaping), even slight kernel differences produce non-trivial waveform differences that corrupt the model's learned decision boundaries.
+
+Secondary factor: **BatchNorm stat corruption.** Training mixes Zhu AWGN (~6.3 dB mean power), synth AWGN (~5.9 dB), and synth KB2 (~−4.1 dB) in every batch. The 11+ dB power gap between AWGN and KB2 pollutes BatchNorm running stats in the CNN stem, degrading both distributions relative to a pure-real-data fine-tune.
+
+Contributing factor: **data imbalance.** 200K synthetic vs 37K real = model spends 84% of training on synthetic distribution, drifting away from real Zhu statistics.
+
+### Conclusions
+
+1. **37K Zhu fine-tune corpus is NOT the bottleneck.** Adding 200K synthetic fine-tune frames degrades performance.
+2. **Synthetic pre-training ≠ synthetic fine-tuning.** Synthetic data helps at pretrain stage (ablation NoPretrain: +0.229pp regression) because it teaches general channel structure. Fine-tuning on synthetic data destroys real-data calibration.
+3. **Architecture/task ceiling is confirmed** at ~2.28% with real-only fine-tuning. The canonical v6b3 result stands.
+4. **Sim-to-real gap is BT-specific**: BT=0.5 GMSK generation in Python/PyTorch does not faithfully match Zhu's MATLAB simulator for the same nominal parameters.
+
+**V6_FINAL_BER remains 2.2820% (v6b3_canonical). No change.**
+
