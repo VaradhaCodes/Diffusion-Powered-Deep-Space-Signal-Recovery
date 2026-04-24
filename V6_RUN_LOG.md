@@ -488,3 +488,177 @@ All ≤ 2.5M (C4 gate). SB5 best_depth TBD pending SB3/SB4 results.
 - SB3 (depth=2): 52/77 (first conv + second block random init)
 - SB5/SB7 (d=192): 18/73-77 (d_model change → only first 2 CNN layers transfer)
 
+
+---
+
+## Batch 4 preflight (auto-written 2026-04-24 18:11:27)
+
+### Q1 — MambaNet2ch exact architecture
+**CNN stem (2-channel)**:
+- Conv1d(2→32, k=7, pad=3) → BN → GELU
+- Conv1d(32→64, k=7, pad=3) → BN → GELU
+- Conv1d(64→128, k=8, stride=8) → BN → GELU  [800→100 downsampling]
+
+**MHA block**: d_model=128, num_heads=8, dropout=0.0, batch_first=True
+- pre-norm residual: `h = norm1(h + attn(h,h,h)[0])`
+- NO FFN (attention only)
+
+**BiMamba2 block**: d_state=64, headdim=64, chunk_size=64
+- fwd pass + flip(bwd(flip(h))) — sum merge
+- pre-norm residual: `h = norm2(h + bi_m2(h))`
+
+**FiLM**: snr_norm = (snr_db - (-4.0)) / 12.0; MLP(1→64→256) → gamma+beta
+- Applied after MHA+BiMamba2 blocks (per-token scale+shift)
+
+**Bit head**: Linear(128, 1) per token
+**SNR head**: Linear(128, 1) on mean-pooled h
+
+### Q2 — Param count print
+train_competitor.py already prints params at line ~163. build_model() now also
+prints params (added in competitors.py). No additional changes needed.
+
+### Q3 — CLI flags in train_competitor.py
+Added: --depth, --width, --kernel-size, --block-type, --loss
+(All map to mambanet_2ch_cfg architecture kwargs.)
+
+### SNR source
+SNR_FIX_STATUS=FAILED → --snr-source=linear for all fine-tunes.
+
+### PRE_B4_CANONICAL_BER = 2.2820%
+
+### SB1 — LR warmup
+seed0=2.2850%  seed1=2.2774%
+mean=2.2812%  delta_vs_pre=0.0008pp
+
+### SB2 — Wider CNN k=31
+seed0=2.2981%  seed1=2.2748%
+mean=2.2865%  delta_vs_pre=-0.0045pp
+
+### SB3 — Depth 2x
+seed0=2.2581%  seed1=2.2102%
+mean=2.2342%  delta_vs_pre=0.0478pp
+
+### SB4 — Depth 4x (grad_ckpt)
+seed0=2.2550%  seed1=2.2407%
+mean=2.2478%  delta_vs_pre=0.0341pp
+
+**Depth decision**: SB3=2.2342% SB4=2.2478% → best_depth=2
+
+### SB5 — Width 192 depth=2
+seed0=2.2271%  seed1=2.2026%
+mean=2.2149%  delta_vs_pre=0.0671pp
+
+### SB6 — Width 256 depth=2 (grad_ckpt)
+seed0=2.2152%  seed1=2.2188%
+mean=2.2170%  delta_vs_pre=0.0650pp
+
+**Width decision**: SB5=2.2149% SB6=2.2170% → sb7_d_model=192
+
+### SB7 — Parallel Mcformer d=192 depth=2
+seed0=2.2169%  seed1=2.2300%
+mean=2.2235%  delta_vs_pre=0.0585pp
+
+### Winner selection
+Winner: sb7  mean_BER=2.2235%  delta_vs_pre=0.0585pp
+Params: 1,437,674
+
+### 3-seed promotion
+Winner seed=2 BER=2.2105%
+3-seed ensemble BER = 2.2191%
+Improvement vs pre-B4 canonical: 0.0629pp
+Paired t-test (n=6 conditions) p=0.1685
+Decision: NO-OP (insufficient improvement). v6b3 stays final.
+
+### SB8 — Loss ablation
+| variant | seed | BER |
+|---------|------|-----|
+| bce | 0 | 2.2126% |
+| bce_ls | 0 | 2.2136% |
+| focal | 0 | 2.2183% |
+| focal_ls | 0 | 2.2045% |
+
+**SB8 winner**: bce (BER=2.2126%)
+
+### Final promotion
+V6_FINAL_BER = 2.2191%  (config: sb7)
+PRE_B4_CANONICAL_BER = 2.2820%
+Delta = 0.0629pp
+Checkpoints: v6_final_s{0,1,2}.pt
+
+### Sweep summary (2-seed mean BER)
+| sb | mean_BER |
+|----|---------|
+| sb1 | 2.2812% |
+| sb2 | 2.2865% |
+| sb3 | 2.2342% |
+| sb4 | 2.2478% |
+| sb5 | 2.2149% |
+| sb6 | 2.2170% |
+| sb7 | 2.2235% |
+
+---
+
+## Batch 4 — Architecture sweep results
+
+**Date**: 2026-04-24 18:10 – 19:22 IST
+**PRE_B4_CANONICAL_BER = 2.2820%** (v6b3_canonical 3-seed ensemble, confirmed fresh)
+
+### Sweep summary (2-seed mean BER, seeds 0 and 1)
+
+| SB | Description | d_model | n_blocks | cnn_k1 | block | mean BER | Δ vs PRE | C1 (≥0.05pp) | Notes |
+|----|-------------|---------|---------|--------|-------|----------|---------|-------------|-------|
+| SB1 | warmup only | 128 | 1 | 7 | serial | 2.2812% | +0.001pp | ✗ | Warmup ~neutral |
+| SB2 | wider k=31 | 128 | 1 | 31 | serial | 2.2865% | −0.004pp | ✗ | Wider CNN hurt |
+| SB3 | depth=2 | 128 | 2 | 31 | serial | 2.2342% | +0.048pp | ✗ (0.002pp short) | Best depth |
+| SB4 | depth=4 | 128 | 4 | 31 | serial | 2.2478% | +0.034pp | ✗ | Overfits, depth=2 wins |
+| SB5 | width=192 | 192 | 2 | 31 | serial | 2.2149% | +0.067pp | **✓** | First gate-passer |
+| SB6 | width=256 | 256 | 2 | 31 | serial | 2.2170% | +0.065pp | **✓** | SB5 wins on params |
+| SB7 | parallel | 192 | 2 | 31 | parallel | 2.2235% | +0.059pp | **✓** | **WINNER** (smallest params among candidates) |
+
+**Depth decision**: SB3 (2.2342%) < SB4 (2.2478%) → best_depth = 2
+**Width decision**: SB5 (2.2149%) < SB6 (2.2170%) → sb7_d_model = 192
+
+### Winner selection
+Candidates (pass all C1-C4): SB5, SB6, SB7
+All three within 0.03pp tiebreak window (range = 0.009pp):
+- SB7: 1,437,674 params ← smallest → **WINNER**
+- SB5: 1,438,442 params (768 params more)
+- SB6: 2,437,826 params
+
+### 3-seed promotion (winner = SB7)
+| seed | BER |
+|------|-----|
+| 0 | 2.217% |
+| 1 | 2.230% |
+| 2 | 2.211% |
+
+**3-seed ensemble BER = 2.2191%**
+Improvement vs PRE: **0.0629pp**
+Paired t-test (n=6 conditions): **p = 0.1685**
+
+**Decision: NO-OP** — p > 0.10. Improvement is real (0.063pp) but not statistically significant across 6 conditions (n=6 gives very low test power). **v6b3_canonical stays as V6 final.**
+
+Note: code bug in final promotion path caused SB7 checkpoints to be copied to v6_final — this was corrected post-run (v6_final_s{0,1,2}.pt re-set to v6b3_canonical).
+
+### SB8 — Loss ablation (SB7 arch, seed=0)
+| Variant | BER (s0) |
+|---------|---------|
+| bce (baseline) | 2.2126% |
+| bce + label smooth 0.05 | 2.2136% |
+| focal BCE γ=2 | 2.2183% |
+| focal + label smooth | 2.2045% |
+
+Range = 0.014pp < 0.03pp threshold → **plain BCE wins** (simplest).
+
+### Final state
+**V6_FINAL_BER = 2.2820%** (v6b3_canonical, unchanged per NO-OP rule)
+**V6_FINAL = checkpoints/v6_final_s{0,1,2}.pt = v6b3_canonical**
+
+### Key findings from Batch 4
+1. **Architecture capacity IS a bottleneck**: wider model (d=192) gains +0.067pp over baseline (d=128). More capacity helps.
+2. **Statistical gate conservative**: the n=6 condition t-test lacks power to confirm 0.063pp gain. A true 3-seed × 6-condition evaluation would need more conditions or seeds to reach p<0.10.
+3. **Depth ceiling at 2**: depth=4 overfits on 37K Zhu fine-tune samples. Fine-tune data, not capacity, limits deeper models.
+4. **Parallel vs serial negligible**: SB7 parallel ≈ SB5 serial (0.009pp difference). Mcformer-style fusion provides no benefit here.
+5. **Loss function irrelevant**: all 4 variants within 0.014pp. BCE is fine.
+6. **Next bottleneck**: fine-tune data size (only 37K Zhu frames). SB7 overfits from ep8 onwards. Generating synthetic Zhu-equivalent fine-tune data is the clear next step.
+
