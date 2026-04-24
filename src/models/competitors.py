@@ -220,6 +220,109 @@ class MambaNet2ch(nn.Module):
         return self.bit_head(h).squeeze(-1), self.snr_head(h.mean(1)).squeeze(-1)
 
 
+# ══════════════════════════════════════════════════════════════════════════════
+# V6 Batch 4 — Configurable MambaNet2ch architecture sweep
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _make_mamba2_d(d_model: int) -> Mamba2:
+    return Mamba2(d_model=d_model, d_state=64, headdim=64, chunk_size=64)
+
+
+class _BiMamba2BlockCfg(nn.Module):
+    """Bidirectional Mamba-2 with configurable d_model."""
+    def __init__(self, d_model: int):
+        super().__init__()
+        self.fwd = _make_mamba2_d(d_model)
+        self.bwd = _make_mamba2_d(d_model)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        h_f = self.fwd(x)
+        h_b = torch.flip(self.bwd(torch.flip(x, [1])), [1])
+        return h_f + h_b
+
+
+class _SerialBlock(nn.Module):
+    """MHA → BiMamba2 serial block, pre-norm residuals, optional grad checkpoint."""
+    def __init__(self, d_model: int, grad_ckpt: bool = False):
+        super().__init__()
+        n_heads = max(1, d_model // 16)
+        self.attn  = nn.MultiheadAttention(d_model, n_heads, dropout=0.0, batch_first=True)
+        self.norm1 = nn.LayerNorm(d_model)
+        self.bi_m2 = _BiMamba2BlockCfg(d_model)
+        self.norm2 = nn.LayerNorm(d_model)
+        self._grad_ckpt = grad_ckpt
+
+    def _body(self, h: torch.Tensor) -> torch.Tensor:
+        h = self.norm1(h + self.attn(h, h, h, need_weights=False)[0])
+        h = self.norm2(h + self.bi_m2(h))
+        return h
+
+    def forward(self, h: torch.Tensor) -> torch.Tensor:
+        if self._grad_ckpt and self.training:
+            import torch.utils.checkpoint as cp
+            return cp.checkpoint(self._body, h, use_reentrant=False)
+        return self._body(h)
+
+
+class _ParallelBlock(nn.Module):
+    """Mcformer-style: LN(h + MHA(h) + BiMamba2_fwd(h) + BiMamba2_bwd(flip(h)))."""
+    def __init__(self, d_model: int, grad_ckpt: bool = False):
+        super().__init__()
+        n_heads = max(1, d_model // 16)
+        self.attn  = nn.MultiheadAttention(d_model, n_heads, dropout=0.0, batch_first=True)
+        self.fwd_m = _make_mamba2_d(d_model)
+        self.bwd_m = _make_mamba2_d(d_model)
+        self.norm  = nn.LayerNorm(d_model)
+        self._grad_ckpt = grad_ckpt
+
+    def _body(self, h: torch.Tensor) -> torch.Tensor:
+        attn_out = self.attn(h, h, h, need_weights=False)[0]
+        fwd_out  = self.fwd_m(h)
+        bwd_out  = torch.flip(self.bwd_m(torch.flip(h, [1])), [1])
+        return self.norm(h + attn_out + fwd_out + bwd_out)
+
+    def forward(self, h: torch.Tensor) -> torch.Tensor:
+        if self._grad_ckpt and self.training:
+            import torch.utils.checkpoint as cp
+            return cp.checkpoint(self._body, h, use_reentrant=False)
+        return self._body(h)
+
+
+class MambaNet2chCfg(nn.Module):
+    """Configurable MambaNet2ch for V6 Batch 4 architecture sweep.
+
+    d_model   : embedding dim (128 / 192 / 256)
+    n_blocks  : stacked (MHA + BiMamba2) blocks
+    cnn_k1    : first CNN kernel size (7 = baseline, 31 = SB2+)
+    parallel  : serial vs Mcformer-style parallel block
+    grad_ckpt : per-block gradient checkpointing
+    """
+    def __init__(self, d_model: int = 128, n_blocks: int = 1,
+                 cnn_k1: int = 7, parallel: bool = False, grad_ckpt: bool = False):
+        super().__init__()
+        self.cnn = nn.Sequential(
+            nn.Conv1d(2, 32, kernel_size=cnn_k1, padding=cnn_k1 // 2),
+            nn.BatchNorm1d(32), nn.GELU(),
+            nn.Conv1d(32, 64, kernel_size=7, padding=3),
+            nn.BatchNorm1d(64), nn.GELU(),
+            nn.Conv1d(64, d_model, kernel_size=8, stride=8),
+            nn.BatchNorm1d(d_model), nn.GELU(),
+        )
+        cls = _ParallelBlock if parallel else _SerialBlock
+        self.blocks   = nn.ModuleList([cls(d_model, grad_ckpt) for _ in range(n_blocks)])
+        self.film      = _FiLM(d_model)
+        self.bit_head  = nn.Linear(d_model, 1)
+        self.snr_head  = nn.Linear(d_model, 1)
+
+    def forward(self, iq: torch.Tensor, snr_db: torch.Tensor):
+        snr_norm = ((snr_db - _SNR_MIN) / _SNR_RANGE).unsqueeze(-1)
+        h = self.cnn(iq).permute(0, 2, 1)
+        for block in self.blocks:
+            h = block(h)
+        h = self.film(h, snr_norm)
+        return self.bit_head(h).squeeze(-1), self.snr_head(h.mean(1)).squeeze(-1)
+
+
 # ── Registry ──────────────────────────────────────────────────────────────────
 
 MODELS = {
@@ -230,10 +333,15 @@ MODELS = {
     "mambanet_no_film":     MambaNetNoFiLM,
     "mambanet_2ch":         MambaNet2ch,
     "mambanet_no_pretrain": MambaNet,   # same arch, trained with --skip-pretrain
+    # V6 Batch 4 configurable sweep model
+    "mambanet_2ch_cfg":     MambaNet2chCfg,
 }
 
 
-def build_model(name: str) -> nn.Module:
+def build_model(name: str, **kwargs) -> nn.Module:
     if name not in MODELS:
         raise ValueError(f"Unknown model '{name}'. Choose from {list(MODELS)}")
-    return MODELS[name]()
+    model = MODELS[name](**kwargs)
+    n_params = sum(p.numel() for p in model.parameters())
+    print(f"[build_model] {name}  params={n_params:,}  kwargs={kwargs}")
+    return model

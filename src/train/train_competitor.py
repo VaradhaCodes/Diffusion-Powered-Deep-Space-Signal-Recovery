@@ -107,6 +107,19 @@ def main():
     ap.add_argument("--snr-source",      type=str,   default="linear",
                     choices=["gt", "linear", "neural"],
                     help="gt=ground truth (oracle), linear=V5 power estimator, neural=v6b2 neural")
+    # V6 Batch 4 architecture sweep flags
+    ap.add_argument("--depth",           type=int,   default=1,
+                    help="number of (MHA+BiMamba2) blocks (mambanet_2ch_cfg only)")
+    ap.add_argument("--width",           type=int,   default=128,
+                    help="d_model embedding dimension (mambanet_2ch_cfg only)")
+    ap.add_argument("--kernel-size",     type=int,   default=7,
+                    help="first CNN kernel size (mambanet_2ch_cfg only)")
+    ap.add_argument("--block-type",      type=str,   default="serial",
+                    choices=["serial", "parallel"],
+                    help="serial = MHA→BiMamba2 chain; parallel = Mcformer-style additive")
+    ap.add_argument("--loss",            type=str,   default="bce",
+                    choices=["bce", "bce_ls", "focal", "focal_ls"],
+                    help="loss variant: bce | bce_ls (label smooth 0.05) | focal (γ=2) | focal_ls")
     args = ap.parse_args()
 
     torch.manual_seed(args.seed)
@@ -145,9 +158,13 @@ def main():
     val_loader = DataLoader(zhu_val, batch_size=args.batch, shuffle=False, pin_memory=True)
 
     # ── Model ─────────────────────────────────────────────────────────────────
-    model = build_model(args.model).to(DEVICE)
-    n_params = sum(p.numel() for p in model.parameters())
-    print(f"\nModel: {args.model}  params={n_params:,}")
+    model_kwargs = {}
+    if args.model == "mambanet_2ch_cfg":
+        model_kwargs = dict(
+            d_model=args.width, n_blocks=args.depth,
+            cnn_k1=args.kernel_size, parallel=(args.block_type == "parallel"),
+        )
+    model = build_model(args.model, **model_kwargs).to(DEVICE)
 
     # ══════════════════════════════════════════════════════════════════════════
     # Phase A — pre-train on synthetic

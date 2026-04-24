@@ -416,3 +416,75 @@ Bottleneck is likely the fine-tune data size (only 37K samples) or architecture 
 **Winner = 500K. V6B3_CANONICAL_BER = 2.2820%** (unchanged).
 
 Scaling curve updated with 2 data points → figures/v6b3_scaling_curve.png
+
+Scaling curve updated with 2 data points → figures/v6b3_scaling_curve.png
+
+---
+
+## Batch 4 preflight
+
+**Date**: 2026-04-24
+
+### Q1 — MambaNet2ch exact architecture
+
+**CNN stem (2-channel, raw IQ input — no FeatureExtractor)**:
+| Layer | Type | Config |
+|-------|------|--------|
+| 0 | Conv1d | in=2, out=32, k=7, pad=3 |
+| 1 | BatchNorm1d | 32 |
+| 2 | GELU | — |
+| 3 | Conv1d | in=32, out=64, k=7, pad=3 |
+| 4 | BatchNorm1d | 64 |
+| 5 | GELU | — |
+| 6 | Conv1d | in=64, out=128, k=8, stride=8 | ← 800→100 downsampling |
+| 7 | BatchNorm1d | 128 |
+| 8 | GELU | — |
+
+**MHA block**: `d_model=128, num_heads=8, dropout=0.0, batch_first=True`
+- Pre-norm residual: `h = norm1(h + attn(h, h, h, need_weights=False)[0])`
+- **NO FFN** (bare attention only)
+
+**BiMamba2 block**: `Mamba2(d_model=128, d_state=64, headdim=64, chunk_size=64)`
+- Bidirectional: `h_f + flip(bwd(flip(h)))` — sum merge
+- Pre-norm residual: `h = norm2(h + bi_m2(h))`
+
+**FiLM**: `snr_norm = (snr_db − (−4.0)) / 12.0` → MLP(1→64 GELU→256) → gamma+beta
+- Applied per-token after MHA+BiMamba2 blocks: `(1+γ)·h + β`
+
+**Bit head**: `Linear(128, 1)` per symbol token
+**SNR head**: `Linear(128, 1)` on `mean(h, dim=1)`
+
+### Q2 — Param count print
+
+`train_competitor.py` already prints params at model creation (confirmed at line ~163).
+Added param count print to `build_model()` in `competitors.py` (now prints every call).
+No action needed beyond that.
+
+### Q3 — CLI flags in train_competitor.py
+
+Previously missing: `--depth`, `--width`, `--kernel-size`, `--block-type`, `--loss`.
+**Added all 5 flags** (map to `mambanet_2ch_cfg` architecture kwargs when `--model mambanet_2ch_cfg`).
+
+### SNR source
+`SNR_FIX_STATUS = FAILED` (line 4 of this log).
+All V6 Batch 4 fine-tunes: `--snr-source=linear` (power estimator fallback).
+
+### Param counts for sweep configs (verified by forward pass)
+| SB | Config | Params |
+|----|--------|--------|
+| SB1 | d=128 n=1 k=7 serial | 399,354 |
+| SB2 | d=128 n=1 k=31 serial | 400,890 |
+| SB3 | d=128 n=2 k=31 serial | 702,226 |
+| SB4 | d=128 n=4 k=31 serial | 1,304,898 |
+| SB5 | d=192 n=2 k=31 serial | 1,438,442 |
+| SB6 | d=256 n=2 k=31 serial | 2,437,826 |
+| SB7 | d=192 n=2 k=31 parallel | 1,437,674 |
+
+All ≤ 2.5M (C4 gate). SB5 best_depth TBD pending SB3/SB4 results.
+
+### Pretrain key transfer (strict=False, shape-safe filter)
+- SB1 (same arch): 53/53 tensors loaded (100%)
+- SB2 (k=31): 52/53 (first conv shape mismatch → random init for cnn.0)
+- SB3 (depth=2): 52/77 (first conv + second block random init)
+- SB5/SB7 (d=192): 18/73-77 (d_model change → only first 2 CNN layers transfer)
+
