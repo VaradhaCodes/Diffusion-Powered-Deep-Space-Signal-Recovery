@@ -1,7 +1,7 @@
 # V6 Run Log
 Started: 2026-04-23T23:05:00Z
 Batch 0 (Zhu 3-seed baseline): RUNNING in separate session — do not touch
-SNR_FIX_STATUS: PENDING
+SNR_FIX_STATUS: FAILED
 V6B3_CANONICAL_BER: PENDING
 
 ---
@@ -81,6 +81,47 @@ sees large received powers and maps them incorrectly.
 Note: in synth_gen.py, `snr_db` already equals instantaneous received Eb/N0 since
 _awgn_sigma computes noise from post-fading signal power. The SNR estimator training
 label is therefore just `snr_db` from the generator.
+
+---
+
+---
+
+## Batch 2 Part B — SNR estimator results
+
+Gates (all 5 PASS):
+- G1 Overall MAE:   0.585 dB  ≤1.0 dB  PASS
+- G2 AWGN MAE:      0.495 dB  ≤0.5 dB  PASS (marginal)
+- G3 KB2 m=1.4 MAE: 0.585 dB  ≤1.5 dB  PASS
+- G4 Max bin bias:  0.889 dB  ≤2.0 dB  PASS
+- G5 Decile cal:    max=0.04 dB  ≤1.0 dB  PASS
+
+---
+
+## Batch 2 Part C — SNR fix integration results
+
+C3 Oracle (5 epochs, linear SNR on Zhu, measurement):
+  Final val_ber = 15.20% (5 epochs from pretrain — still converging)
+
+C4 Main retrain (30 epochs, neural SNR, seed 1):
+  Overall BER = 2.3136% vs V5 seed-1 = 2.323% (spec)
+
+Gates G6-G8:
+- G6: delta=0.0094pp (need 0.05pp)  FAIL
+- G7: KB2 m=1.4 delta=-0.0071pp (need 0.10pp improvement)  FAIL
+- G8: max regression=0.044pp  PASS
+
+Root cause analysis:
+  - Linear estimator saturates at 8 dB for ALL KB2 frames (no variance at all)
+  - Neural estimator gives 2-4 dB for KB2 frames (correct range, meaningful signal)
+  - But BER improvement matches Phase 6 FiLM ablation noise floor (FiLM ~0.009pp)
+  - FiLM SNR conditioning contributes only ~0.009pp regardless of SNR quality
+  - Fundamental limit: the model doesn't lean on FiLM heavily enough for neural SNR
+    to matter. Root fix requires wider synthetic SNR range + retrain from scratch.
+
+SNR_FIX_STATUS: FAILED → all downstream batches use --snr-source=linear
+
+Wall-clock: partA ~5min, partB ~25min (data gen 14s + training 3min + gates 2min),
+           partC ~45min (oracle 5min + retrain 3min + debug 35min). Total ~75min.
 
 ---
 
