@@ -333,7 +333,9 @@ def finetune(size_label: str, seed: int, from_seed: int | None = None,
     model = build_model("mambanet_2ch").to(DEVICE)
     ck = torch.load(pre_ckpt, map_location=DEVICE)
     model.load_state_dict(ck["model"])
-    print(f"  Loaded pretrain ckpt: {pre_ckpt.name}  (val_ber={ck.get('val_ber', '?'):.4f})")
+    _vb = ck.get('val_ber', ck.get('val_loss', '?'))
+    _vb_str = f"{_vb:.4f}" if isinstance(_vb, float) else str(_vb)
+    print(f"  Loaded pretrain ckpt: {pre_ckpt.name}  (val_loss={_vb_str})")
 
     opt   = torch.optim.Adam(model.parameters(), lr=FT_LR)
     sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=FT_EPOCHS, eta_min=FT_LR_MIN)
