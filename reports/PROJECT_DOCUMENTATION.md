@@ -8,9 +8,9 @@ No fabrication. No smoothing. No framing.
 
 ## Project Goal
 
-Beat Zhu et al. 2023 on their Zenodo GMSK dataset. The Zhu paper trains a CNN + Bi-LSTM model on GMSK signals propagated through a K-distribution fading channel and achieves a test BER of ~3.12%.
+Beat Zhu et al. 2023 on their Zenodo GMSK dataset. Zhu et al. train a CNN + Bi-LSTM model on GMSK signals propagated through a K-distribution fading channel. Their paper presents results as BER-vs-SNR curves only — no scalar BER is reported. We reproduced their architecture from the paper and measured **3.122% BER** (single seed) on their published Zenodo test set. That is our baseline.
 
-Our target: lower BER than 3.12% on the same held-out test set.
+Our target: lower BER than our reproduced 3.122% on the same held-out test set.
 
 Reference: Zhu et al., "AI-Based GMSK Signal Demodulator," Radio Science 2023. Dataset on Zenodo.
 
@@ -127,7 +127,7 @@ Additional checks: GMSK constant-envelope verified, K-distribution E[|h|²]=b²=
 
 ## Phase 2 — Zhu Baseline Reproduction
 
-**Goal:** Reproduce Zhu's CNN + Bi-LSTM architecture, verify BER ≈ 3.12% on Zhu test set.
+**Goal:** Reproduce Zhu's CNN + Bi-LSTM architecture from the paper description and measure its BER on the Zenodo test set. The Zhu paper presents only BER-vs-SNR curves (Figures 9–11), no scalar BER value is stated anywhere in the paper.
 
 **Architecture from paper** (Zhu Table 1, 2):
 - CNN layers → Bi-LSTM (sum-merge, 32 hidden) → FC
@@ -195,7 +195,7 @@ Val BER plateaus at ~20–21% from epoch 10 onward. Training loss keeps dropping
 - BER < 5%: YES (3.122%)
 - AWGN < KB2 trend: YES (1.9% < 2.7% < 4.7%)
 
-Note: Zhu paper reports ~3.12% which we reproduce to 4 decimal places. The gap from paper's ideal performance (loss→0 in 30 epochs) is because Zenodo dataset is ~33% smaller than the paper's training set.
+Note: The Zhu paper does not report a scalar BER — all results are BER-vs-SNR curves. Our 3.122% is the BER we measured by running our reproduction of their architecture on their Zenodo test set. The Zenodo dataset is ~33% smaller than the training set referenced in the paper (42K vs 63K), so this number is not directly comparable to any curve in their paper.
 
 ---
 
@@ -493,7 +493,7 @@ Source: `results/mambanet_2ch_final_test.csv`, `results/mambanet_2ch_final_summa
 | KB2, BT=0.5, m=1.4 | 3.860 |
 | **OVERALL** | **2.275%** |
 
-**vs Zhu baseline (3.122%): −0.847 pp = −27.1% relative improvement.**
+**vs our reproduced Zhu architecture (3.122%, single seed): −0.847 pp = −27.1% relative improvement.**
 
 ---
 
@@ -539,10 +539,11 @@ Source: `results/mambanet_2ch_final_test.csv`, `results/mambanet_2ch_final_summa
 
 ### Headline
 
-**MambaNet-2ch: 2.275% BER vs Zhu baseline 3.122% BER**
-**Absolute improvement: −0.847 pp**
+**MambaNet-2ch: 2.275% BER vs our reproduced Zhu architecture: 3.122% (single seed) / 2.566% (3-seed ensemble)**
+**Absolute improvement vs single-seed reproduction: −0.847 pp**
 **Relative improvement: −27.1%**
-**Statistical significance: p < 0.001**
+**Statistical significance vs single-seed: p < 0.001**
+**Note: Zhu et al. paper reports no scalar BER — only BER-vs-SNR curves. 3.122% is our own measurement.**
 
 ---
 
@@ -618,7 +619,7 @@ Concat: 28800 = 3200(CNN) + 800×32(LSTM)
 
 7. **Viterbi/CRF post-processing is neutral:** The model already captures GMSK bit constraints implicitly. Adding an explicit sequence decoder doesn't help.
 
-8. **Baseline reproduction:** The Zenodo dataset is smaller than the paper's (42K vs 63K reported). Paper's BER of ~3.12% is reproduced exactly at 3.122%.
+8. **Baseline reproduction:** The Zenodo dataset is smaller than what the paper references (42K vs 63K). The Zhu paper reports no scalar BER — only BER-vs-SNR curves. Our 3.122% is entirely our own measurement from running their architecture on their Zenodo test set.
 
 9. **Pretrain checkpoint matters:** V5 seed 0 accidentally used epoch-1 pretrain checkpoint, giving 3.192% vs 2.800–2.936% for seeds 1/2 with correct epoch-20 checkpoint.
 
@@ -1094,10 +1095,12 @@ Synthetic pretrain ≠ synthetic fine-tune. Synthetic pretrain (500K, general GM
 
 All results on Zhu test set (4,200 frames, 6 conditions, 700/condition). Ensemble = 3-seed aggregate.
 
-| Model | Ensemble BER | vs Zhu Baseline | Source CSV |
+All BER values are our own measurements on the Zhu Zenodo test set. The Zhu paper does not report any scalar BER — only BER-vs-SNR curves. "Zhu BiLSTM" rows are our reproductions of their architecture.
+
+| Model | Ensemble BER | vs Reproduced Zhu (1-seed) | Source CSV |
 |---|---|---|---|
-| Zhu BiLSTM (1 seed, Phase 2) | 3.122% | — | baseline_test_results.csv |
-| Zhu BiLSTM (3-seed ensemble, V6B0) | 2.566% | — | baseline_ensemble_test.csv |
+| Zhu BiLSTM reproduced (1 seed, Phase 2) | 3.122% | — | baseline_test_results.csv |
+| Zhu BiLSTM reproduced (3-seed ensemble, V6B0) | 2.566% | — | baseline_ensemble_test.csv |
 | V5 BiMamba3 (5ch) | 2.759% | −0.363pp | v5_ensemble_test.csv |
 | BiTransformer | 2.640% | −0.482pp | bi_transformer_ensemble_test.csv |
 | BiMamba2 | 2.725% | −0.397pp | bi_mamba2_ensemble_test.csv |
