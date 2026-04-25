@@ -393,7 +393,9 @@ A1 — MambaNet-NoFiLM (`results/mambanet_no_film_s{0,1,2}_test.csv`):
 
 A2 — MambaNet-2ch (`results/mambanet_2ch_s{0,1,2}_test.csv`):
 
-| Condition | S0 BER% | S1 BER% | S2 BER% |
+⚠️ **Data integrity note**: `mambanet_2ch_s1_test.csv` was overwritten by the V6 Batch 2 SNR-fix re-train (also seed 1). The S1 per-condition values below are from the original doc entry at time of evaluation; the current CSV on disk contains the snrfix run values. The ensemble CSV (`mambanet_2ch_ensemble_test.csv`) is authoritative and was generated before the overwrite.
+
+| Condition | S0 BER% | S1 BER% (original, pre-overwrite) | S2 BER% |
 |---|---|---|---|
 | AWGN, BT=0.3 | 1.064 | 1.074 | 1.083 |
 | AWGN, BT=0.5 | 1.197 | 1.216 | 1.219 |
@@ -722,13 +724,13 @@ After the main paper results (Phase 0–8) were locked in at 2.275%, V6 ran a se
 **Purpose**: Get a proper 3-seed ensemble for the Zhu BiLSTM baseline. Phase 2 only ran 1 seed.  
 **Script**: `src/train/train_baseline.py`
 
-### Per-seed results
+### Per-seed results (`results/baseline_s{0,1,2}_test.csv`)
 
 | Seed | AWGN BT=0.3 | AWGN BT=0.5 | KB2 BT=0.3 m=1.2 | KB2 BT=0.3 m=1.4 | KB2 BT=0.5 m=1.2 | KB2 BT=0.5 m=1.4 | OVERALL |
 |------|------------|------------|----------------|----------------|----------------|----------------|---------|
-| 0 | — | — | — | — | — | — | **2.924%** |
-| 1 | — | — | — | — | — | — | **2.929%** |
-| 2 | — | — | — | — | — | — | **3.026%** |
+| 0 | 1.664% | 1.733% | 2.440% | 4.430% | 2.581% | 4.697% | **2.924%** |
+| 1 | 1.699% | 1.694% | 2.427% | 4.490% | 2.577% | 4.684% | **2.929%** |
+| 2 | 1.757% | 1.850% | 2.519% | 4.550% | 2.641% | 4.841% | **3.026%** |
 
 ### 3-seed ensemble (`results/baseline_ensemble_test.csv`)
 
@@ -773,6 +775,18 @@ All 5 estimator gates passed — the neural estimator IS better at measuring KB2
 ### Part C — Integration Test (`results/v6b2_mambanet_snrfix_s1_test.csv`)
 
 Retrained MambaNet-2ch (seed 1) with neural SNR estimates.
+
+**Per-condition results (seed 1, neural SNR):**
+
+| Condition | Neural SNR BER | Linear SNR BER (canonical s1) | Δ |
+|---|---|---|---|
+| AWGN, BT=0.3 | 1.091% | 1.030% | −0.061pp |
+| AWGN, BT=0.5 | 1.196% | 1.170% | −0.026pp |
+| KB2, BT=0.3, m=1.2 | 1.864% | 1.890% | +0.026pp |
+| KB2, BT=0.3, m=1.4 | 3.853% | 3.750% | −0.103pp |
+| KB2, BT=0.5, m=1.2 | 1.931% | 1.850% | −0.081pp |
+| KB2, BT=0.5, m=1.4 | 3.946% | 3.940% | −0.006pp |
+| **OVERALL** | **2.3136%** | **2.270%** | **−0.044pp** |
 
 | Gate | Requirement | Result | PASS? |
 |---|---|---|---|
@@ -925,9 +939,74 @@ Because d_model changes break weight shapes, only partial pretrain weights can b
 | SB3 (depth=2) | 52/77 (first conv + new block random init) |
 | SB5/SB7 (d=192) | 18/73–77 (only first 2 CNN layers; d_model change breaks rest) |
 
-### Sweep results (2-seed mean BER)
+### Sweep results — full per-condition breakdown
 
 Source: `results/v6b4_sb{1-7}_s{0,1}_test.csv`, `results/v6b4_sweep_summary.csv`
+
+PRE canonical (v6b3, verified fresh at B4 start — `results/v6b4_pre_canonical_test.csv`):
+AWGN BT=0.3: 1.042%, BT=0.5: 1.176%, KB2 BT=0.3 m=1.2: 1.900%, KB2 BT=0.3 m=1.4: 3.791%, KB2 BT=0.5 m=1.2: 1.858%, KB2 BT=0.5 m=1.4: 3.925%, OVERALL: **2.282%**
+
+**SB1** — LR warmup, d=128 n=1 k=7 serial, 399,354 params
+
+| Seed | AWGN BT=0.3 | AWGN BT=0.5 | KB2 BT=0.3 m=1.2 | KB2 BT=0.3 m=1.4 | KB2 BT=0.5 m=1.2 | KB2 BT=0.5 m=1.4 | OVERALL |
+|------|------------|------------|----------------|----------------|----------------|----------------|---------|
+| 0 | 1.053% | 1.186% | 1.884% | 3.779% | 1.889% | 3.920% | 2.285% |
+| 1 | 1.061% | 1.179% | 1.859% | 3.767% | 1.884% | 3.914% | 2.277% |
+| **mean** | **1.057%** | **1.182%** | **1.871%** | **3.773%** | **1.886%** | **3.917%** | **2.281%** |
+
+Δ vs PRE: +0.001pp — Gate C1: ✗
+
+**SB2** — Wider CNN k=31, d=128 n=1 k=31 serial, 400,890 params
+
+| Seed | AWGN BT=0.3 | AWGN BT=0.5 | KB2 BT=0.3 m=1.2 | KB2 BT=0.3 m=1.4 | KB2 BT=0.5 m=1.2 | KB2 BT=0.5 m=1.4 | OVERALL |
+|------|------------|------------|----------------|----------------|----------------|----------------|---------|
+| 0 | 1.137% | 1.210% | 1.843% | 3.704% | 1.954% | 3.940% | 2.298% |
+| 1 | 1.114% | 1.233% | 1.836% | 3.679% | 1.893% | 3.894% | 2.275% |
+| **mean** | **1.126%** | **1.221%** | **1.839%** | **3.691%** | **1.924%** | **3.917%** | **2.287%** |
+
+Δ vs PRE: −0.004pp — Gate C1: ✗
+
+**SB3** — Depth=2, d=128 n=2 k=31 serial, 702,226 params
+
+| Seed | AWGN BT=0.3 | AWGN BT=0.5 | KB2 BT=0.3 m=1.2 | KB2 BT=0.3 m=1.4 | KB2 BT=0.5 m=1.2 | KB2 BT=0.5 m=1.4 | OVERALL |
+|------|------------|------------|----------------|----------------|----------------|----------------|---------|
+| 0 | 1.061% | 1.260% | 1.793% | 3.597% | 1.911% | 3.926% | 2.258% |
+| 1 | 1.026% | 1.234% | 1.773% | 3.530% | 1.853% | 3.846% | 2.210% |
+| **mean** | **1.043%** | **1.247%** | **1.783%** | **3.564%** | **1.882%** | **3.886%** | **2.234%** |
+
+Δ vs PRE: +0.048pp — Gate C1: ✗ (0.002pp short of 0.05pp threshold)
+
+**SB4** — Depth=4 grad_ckpt, d=128 n=4 k=31 serial, 1,304,898 params
+
+| Seed | AWGN BT=0.3 | AWGN BT=0.5 | KB2 BT=0.3 m=1.2 | KB2 BT=0.3 m=1.4 | KB2 BT=0.5 m=1.2 | KB2 BT=0.5 m=1.4 | OVERALL |
+|------|------------|------------|----------------|----------------|----------------|----------------|---------|
+| 0 | 1.087% | 1.254% | 1.784% | 3.553% | 1.966% | 3.886% | 2.255% |
+| 1 | 1.117% | 1.260% | 1.837% | 3.516% | 1.921% | 3.793% | 2.241% |
+| **mean** | **1.102%** | **1.257%** | **1.811%** | **3.534%** | **1.944%** | **3.839%** | **2.248%** |
+
+Δ vs PRE: +0.034pp — Gate C1: ✗ (depth=4 overfits; depth=2 wins)
+
+**SB5** — Width=192 depth=2, d=192 n=2 k=31 serial, 1,438,442 params
+
+| Seed | AWGN BT=0.3 | AWGN BT=0.5 | KB2 BT=0.3 m=1.2 | KB2 BT=0.3 m=1.4 | KB2 BT=0.5 m=1.2 | KB2 BT=0.5 m=1.4 | OVERALL |
+|------|------------|------------|----------------|----------------|----------------|----------------|---------|
+| 0 | 1.030% | 1.204% | 1.800% | 3.544% | 1.861% | 3.923% | 2.227% |
+| 1 | 1.016% | 1.183% | 1.809% | 3.526% | 1.789% | 3.894% | 2.203% |
+| **mean** | **1.023%** | **1.194%** | **1.804%** | **3.535%** | **1.825%** | **3.909%** | **2.215%** |
+
+Δ vs PRE: +0.067pp — Gate C1: ✓
+
+**SB6** — Width=256 depth=2 grad_ckpt, d=256 n=2 k=31 serial, 2,437,826 params
+
+| Seed | AWGN BT=0.3 | AWGN BT=0.5 | KB2 BT=0.3 m=1.2 | KB2 BT=0.3 m=1.4 | KB2 BT=0.5 m=1.2 | KB2 BT=0.5 m=1.4 | OVERALL |
+|------|------------|------------|----------------|----------------|----------------|----------------|---------|
+| 0 | 1.041% | 1.193% | 1.807% | 3.541% | 1.864% | 3.844% | 2.215% |
+| 1 | 1.040% | 1.211% | 1.796% | 3.527% | 1.849% | 3.890% | 2.219% |
+| **mean** | **1.041%** | **1.202%** | **1.802%** | **3.534%** | **1.856%** | **3.867%** | **2.217%** |
+
+Δ vs PRE: +0.065pp — Gate C1: ✓ (SB5 wins tiebreak: fewer params)
+
+**Summary table (2-seed mean):**
 
 | SB | Description | d_model | n_blocks | cnn_k1 | block_type | params | s0 BER | s1 BER | mean BER | Δ vs PRE | Gate C1 |
 |----|-------------|---------|---------|--------|-----------|--------|--------|--------|----------|---------|---------|
@@ -978,14 +1057,17 @@ Note: A code bug in the final promotion script caused SB7 weights to be copied t
 
 Tested on SB7 configuration with seed 0 only. Source: `results/v6b4_sb8_*_s0_test.csv`
 
-| Variant | BER (s0) | Description |
-|---|---|---|
-| BCE (baseline) | 2.2126% | Standard binary cross-entropy |
-| BCE + label smoothing 0.05 | 2.2136% | Soft targets (y ← 0.05/0.95) |
-| Focal BCE γ=2 | 2.2183% | Down-weight easy examples |
-| Focal + label smooth | 2.2045% | Combined |
+| Condition | BCE | BCE+LS | Focal γ=2 | Focal+LS |
+|---|---|---|---|---|
+| AWGN, BT=0.3 | 1.031% | 1.013% | 1.061% | 1.004% |
+| AWGN, BT=0.5 | 1.187% | 1.190% | 1.190% | 1.187% |
+| KB2, BT=0.3, m=1.2 | 1.764% | 1.781% | 1.803% | 1.777% |
+| KB2, BT=0.3, m=1.4 | 3.497% | 3.519% | 3.584% | 3.560% |
+| KB2, BT=0.5, m=1.2 | 1.873% | 1.847% | 1.849% | 1.841% |
+| KB2, BT=0.5, m=1.4 | 3.923% | 3.931% | 3.823% | 3.857% |
+| **OVERALL** | **2.2126%** | **2.2136%** | **2.2183%** | **2.2045%** |
 
-Range = 0.014pp (< 0.03pp threshold). **Plain BCE wins** — it's simplest and ties for best.
+Range = 0.014pp (< 0.03pp threshold). **Plain BCE wins** — simplest, ties for best overall. Focal+LS lowest OVERALL (2.2045%) but only by 0.008pp on 1 seed.
 
 ### Batch 4 Key Findings
 
