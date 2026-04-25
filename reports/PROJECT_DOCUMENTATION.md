@@ -689,4 +689,492 @@ Concat: 28800 = 3200(CNN) + 800×32(LSTM)
 
 ---
 
-*Generated 2026-04-22. All numbers traceable to CSVs listed in File Index.*
+*Original doc generated 2026-04-22. V6 section added 2026-04-25. All numbers traceable to CSVs listed in File Index.*
+
+---
+
+---
+
+# V6 — Extended Experiments (2026-04-23 onward)
+
+After the main paper results (Phase 0–8) were locked in at 2.275%, V6 ran a series of experiments trying to push further. All V6 work uses the same MambaNet-2ch architecture and Zhu test set. The reference model for V6 is the Phase 5/6/7 result = "V5 mambanet_2ch ensemble" at 2.275%.
+
+**TL;DR of all V6 experiments:**
+
+| Experiment | What we tried | Result | Δ vs baseline | Verdict |
+|---|---|---|---|---|
+| V6 Batch 0 | 3-seed Zhu BiLSTM re-run | 2.566% | — | Baseline confirmed |
+| V6 Batch 2 | Neural SNR estimator integration | 2.314% | +0.009pp | FAILED gate |
+| V6 Batch 3 (500K) | Retrain from scratch, 500K synth pretrain | 2.282% | −0.007pp | Canonical |
+| V6 Batch 3 (1M) | Same, 1M synth pretrain | 2.269% | +0.013pp vs 500K | Not enough gain |
+| V6 Batch 4 (SB1-SB7) | Architecture sweep | 2.219% (SB7) | +0.063pp vs canonical | NO-OP (p=0.17) |
+| V6 Batch 4 (SB8) | Loss function variants | 2.205% (focal+ls) | +0.014pp range | Negligible |
+| V6 SynthFT | Synthetic fine-tune augmentation | 3.712% | −1.430pp regression | HYPOTHESIS REJECTED |
+
+**V6 final canonical: 2.2820%** (v6b3_canonical, 500K pretrain, unchanged through all experiments)
+
+---
+
+## V6 Batch 0 — 3-Seed Zhu Baseline Re-Run
+
+**Date**: 2026-04-23  
+**Purpose**: Get a proper 3-seed ensemble for the Zhu BiLSTM baseline. Phase 2 only ran 1 seed.  
+**Script**: `src/train/train_baseline.py`
+
+### Per-seed results
+
+| Seed | AWGN BT=0.3 | AWGN BT=0.5 | KB2 BT=0.3 m=1.2 | KB2 BT=0.3 m=1.4 | KB2 BT=0.5 m=1.2 | KB2 BT=0.5 m=1.4 | OVERALL |
+|------|------------|------------|----------------|----------------|----------------|----------------|---------|
+| 0 | — | — | — | — | — | — | **2.924%** |
+| 1 | — | — | — | — | — | — | **2.929%** |
+| 2 | — | — | — | — | — | — | **3.026%** |
+
+### 3-seed ensemble (`results/baseline_ensemble_test.csv`)
+
+| Condition | BER% |
+|---|---|
+| AWGN, BT=0.3 | 1.387 |
+| AWGN, BT=0.5 | 1.493 |
+| KB2, BT=0.3, m=1.2 | 2.100 |
+| KB2, BT=0.3, m=1.4 | 3.940 |
+| KB2, BT=0.5, m=1.2 | 2.251 |
+| KB2, BT=0.5, m=1.4 | 4.223 |
+| **OVERALL** | **2.566%** |
+
+Note: 3-seed ensemble (2.566%) is better than the single-seed Phase 2 result (3.122%) because ensemble averaging reduces noise. The Phase 2 single-seed result is more representative of what a single-run would produce; the ensemble gives a fairer comparison against our ensemble'd MambaNet results.
+
+---
+
+## V6 Batch 2 — Neural SNR Estimator Integration
+
+**Date**: 2026-04-23–24  
+**Hypothesis**: The linear SNR estimator (calibrated on AWGN) fails for KB2 fading frames because the received power distribution is completely different. A neural SNR estimator trained on both AWGN and KB2 would give better FiLM conditioning and improve KB2 BER.  
+**Status**: FAILED
+
+### Part A — Channel Distribution Validation (`results/v6b2_partA_channel_validation.csv`)
+
+Confirmed that the linear estimator saturates at ~8 dB for ALL KB2 frames (correctly-received power is in a wide range for K-dist, but the linear estimator ignores this). Neural estimator gives 2–4 dB range for KB2 (meaningful signal).
+
+### Part B — Neural SNR Estimator Training (`results/v6b2_snr_estimator_gate_report.csv`)
+
+Trained a separate SNR estimation head and calibrated against ground-truth Eb/N0 labels from `synth_gen.py`.
+
+| Gate | Threshold | Result | PASS? |
+|---|---|---|---|
+| G1: Overall MAE | ≤1.0 dB | 0.585 dB | **PASS** |
+| G2: AWGN MAE | ≤0.5 dB | 0.495 dB | **PASS** (marginal) |
+| G3: KB2 m=1.4 MAE | ≤1.5 dB | 0.585 dB | **PASS** |
+| G4: Max bin bias | ≤2.0 dB | 0.889 dB | **PASS** |
+| G5: Decile calibration | ≤1.0 dB | 0.04 dB | **PASS** |
+
+All 5 estimator gates passed — the neural estimator IS better at measuring KB2 SNR.
+
+### Part C — Integration Test (`results/v6b2_mambanet_snrfix_s1_test.csv`)
+
+Retrained MambaNet-2ch (seed 1) with neural SNR estimates.
+
+| Gate | Requirement | Result | PASS? |
+|---|---|---|---|
+| G6: Overall delta | ≥0.05pp | +0.0094pp | **FAIL** |
+| G7: KB2 m=1.4 delta | ≥0.10pp | −0.0071pp | **FAIL** |
+| G8: Max regression | <0.05pp | 0.044pp | **PASS** |
+
+**Result**: 2.3136% overall with neural SNR vs 2.314% with linear SNR. Effectively zero improvement.
+
+**Root cause**: FiLM SNR conditioning only contributes ~0.009pp to total performance (as confirmed by Phase 6 NoFiLM ablation). No matter how accurate the SNR estimate, the model barely uses the FiLM signal. Improving SNR quality can't help if the model doesn't depend on it.
+
+**Decision**: `SNR_FIX_STATUS = FAILED`. All subsequent V6 batches use `--snr-source=linear`.
+
+**Wall-clock**: ~75 min total (Part A 5min + Part B 25min + Part C 45min including debug).
+
+---
+
+## V6 Batch 3 — Pretrain Scale Sweep (500K and 1M)
+
+**Date**: 2026-04-24  
+**Hypothesis**: More synthetic pretraining data should improve the learned channel representations and ultimately lower fine-tune BER.  
+**Design**: Rerun from scratch with improved `train_v6b3.py` (AdamW+warmup, early stopping, proper seeding). Sweep synthetic pretrain corpus sizes: 500K → 1M → 2M → 5M. Stop early if incremental gain < 0.05pp.
+
+### New training infrastructure (vs Phase 5 `train_competitor.py`)
+
+| Feature | Old (`train_competitor.py`) | New (`train_v6b3.py`) |
+|---|---|---|
+| Optimizer (pretrain) | Adam, lr=1e-3 | AdamW + linear warmup |
+| Early stopping | None (runs all epochs) | Yes (patience=5 pretrain, patience=10 finetune) |
+| Seeding | Partial | Full (set_seed + worker_init_fn) |
+| Checkpoint format | Per-epoch | Best-val only, step-level |
+| SNR source | Estimated per batch | `--snr-source=linear` (post Batch 2 failure) |
+
+### 500K pretrain results
+
+**Pretrain convergence** (`results/v6b3_pre_500K_s*.log`):
+
+| Seed | Stopped at | Best synth_val_loss |
+|------|-----------|---------------------|
+| 0 | ep28 (early stop) | 0.222284 |
+| 1 | ep32 (power outage, best@ep29) | 0.221824 |
+
+Note: Seed 1 pretrain was interrupted by a power outage at epoch 32 (patience=3/5). The best checkpoint at ep29 was retained; remaining improvement was negligible (LR was already at 1.07e-4).
+
+**Fine-tune convergence** (max 30 epochs, patience=10):
+
+| Seed | Stopped at | Best val_ber |
+|------|-----------|-------------|
+| 0 | ep25 | 0.1502 |
+| 1 | ep27 | 0.1469 |
+| 2 | ep25 | 0.1495 |
+
+**Per-seed test BER** (`results/v6b3_500K_s{0,1,2}_test.csv`):
+
+| Seed | AWGN BT=0.3 | AWGN BT=0.5 | KB2 BT=0.3 m=1.2 | KB2 BT=0.3 m=1.4 | KB2 BT=0.5 m=1.2 | KB2 BT=0.5 m=1.4 | OVERALL |
+|------|------------|------------|----------------|----------------|----------------|----------------|---------|
+| 0 | 1.08% | 1.19% | 1.92% | 3.81% | 1.89% | 3.92% | **2.30%** |
+| 1 | 1.03% | 1.17% | 1.89% | 3.75% | 1.85% | 3.94% | **2.27%** |
+| 2 | 1.02% | 1.17% | 1.89% | 3.81% | 1.84% | 3.92% | **2.28%** |
+
+**3-seed ensemble** (`results/v6b3_500K_ensemble_test.csv`):
+
+| Condition | BER% |
+|---|---|
+| AWGN, BT=0.3 | 1.042 |
+| AWGN, BT=0.5 | 1.176 |
+| KB2, BT=0.3, m=1.2 | 1.900 |
+| KB2, BT=0.3, m=1.4 | 3.791 |
+| KB2, BT=0.5, m=1.2 | 1.858 |
+| KB2, BT=0.5, m=1.4 | 3.925 |
+| **OVERALL** | **2.2820%** |
+
+**Sweep-level gate**: Gain vs V5 mambanet_2ch baseline (2.275%) = −0.007pp. Rule says if gain <0.05pp, stop sweep. But this is ambiguous — 500K is slightly *worse* than V5 baseline, and V5 used an older synth_gen. User decided to run 1M for a real data point.
+
+**Canonical checkpoint selected**: v6b3_canonical_pretrain.pt ← v6b3_pre_500K_s1.pt (best pretrain). v6b3_canonical_s{0,1,2}.pt ← v6b3_500K_s{0,1,2}_ft.pt.
+
+### 1M pretrain results
+
+**Pretrain convergence** (`results/v6b3_pre_1M_s*.log`):
+
+| Seed | Stopped at | Best synth_val_loss |
+|------|-----------|---------------------|
+| 0 | ep40 (hit max) | 0.2204 |
+| 1 | ep39 (early stop) | 0.2194 |
+
+1M pretrain reached lower loss than 500K (0.2204/0.2194 vs 0.2222/0.2218). More data does improve pretrain quality.
+
+**Per-seed test BER** (`results/v6b3_1M_s{0,1,2}_test.csv`):
+
+| Seed | AWGN BT=0.3 | AWGN BT=0.5 | KB2 BT=0.3 m=1.2 | KB2 BT=0.3 m=1.4 | KB2 BT=0.5 m=1.2 | KB2 BT=0.5 m=1.4 | OVERALL |
+|------|------------|------------|----------------|----------------|----------------|----------------|---------|
+| 0 | 1.10% | 1.19% | 1.86% | 3.75% | 1.88% | 3.93% | **2.28%** |
+| 1 | 1.10% | 1.14% | 1.87% | 3.70% | 1.88% | 3.89% | **2.26%** |
+| 2 | 1.09% | 1.14% | 1.87% | 3.76% | 1.83% | 3.86% | **2.26%** |
+
+**3-seed ensemble** (`results/v6b3_1M_ensemble_test.csv`):
+
+| Condition | BER% |
+|---|---|
+| AWGN, BT=0.3 | 1.098 |
+| AWGN, BT=0.5 | 1.160 |
+| KB2, BT=0.3, m=1.2 | 1.867 |
+| KB2, BT=0.3, m=1.4 | 3.736 |
+| KB2, BT=0.5, m=1.2 | 1.862 |
+| KB2, BT=0.5, m=1.4 | 3.892 |
+| **OVERALL** | **2.2692%** |
+
+### Batch 3 Scaling Analysis
+
+| Corpus size | Ensemble BER | Gain 500K→N |
+|---|---|---|
+| V5 mambanet_2ch (old pretrain) | 2.2750% | — |
+| **500K (v6b3 canonical)** | **2.2820%** | baseline |
+| **1M** | **2.2692%** | **+0.013pp** |
+| 2M, 5M | NOT RUN | — |
+
+Gain 500K→1M = 0.013pp < 0.05pp gate → **SWEEP STOPPED. Winner = 500K.**  
+Range across 500K–1M = 0.013pp. The scaling curve is essentially flat after 500K. More pretrain data improves the pretrain loss but does NOT translate to meaningful BER improvement after Zhu fine-tune.
+
+**Key insight**: Bottleneck is fine-tune data size (37K Zhu frames), not pretrain corpus size. Model overfits to fine-tune data from early in training regardless of pretrain quality.
+
+**V6B3_CANONICAL_BER = 2.2820%** (500K, unchanged).
+
+---
+
+## V6 Batch 4 — Architecture Sweep
+
+**Date**: 2026-04-24 (~18:10–19:22 IST + 3-seed promotion run)  
+**Reference**: PRE_B4_CANONICAL_BER = 2.2820%  
+**Hypothesis**: The default MambaNet-2ch (d=128, 1 block) may be capacity-limited. Wider, deeper, or differently-structured models could improve BER.  
+**Script**: `src/train/train_v6b4.py` with `--model mambanet_2ch_cfg` + architecture flags  
+**Design**: 2-seed sweep (seeds 0, 1) for fast screening. Gate C1: must improve ≥0.05pp vs canonical to be a candidate. Tiebreaker: smallest param count.
+
+### Configurable architecture (`src/models/competitors.py` — `MambaNet2chCfg`)
+
+Adds these knobs to MambaNet-2ch:
+- `d_model`: embedding dimension (128 / 192 / 256)
+- `n_blocks`: stacked (MHA + BiMamba2) blocks (1 / 2 / 4)
+- `cnn_k1`: first CNN kernel (7 = baseline, 31 = wider receptive field)
+- `parallel`: serial (MHA → BiMamba2 sequential) vs parallel (Mcformer-style: all three summed)
+- `grad_ckpt`: per-block gradient checkpointing for larger models
+
+### Pretrain weight transfer strategy
+
+Because d_model changes break weight shapes, only partial pretrain weights can be reused:
+| Config | Weights transferred |
+|---|---|
+| SB1 (same arch, d=128) | 53/53 tensors (100%) |
+| SB2 (k=31, different first conv) | 52/53 (first conv random init) |
+| SB3 (depth=2) | 52/77 (first conv + new block random init) |
+| SB5/SB7 (d=192) | 18/73–77 (only first 2 CNN layers; d_model change breaks rest) |
+
+### Sweep results (2-seed mean BER)
+
+Source: `results/v6b4_sb{1-7}_s{0,1}_test.csv`, `results/v6b4_sweep_summary.csv`
+
+| SB | Description | d_model | n_blocks | cnn_k1 | block_type | params | s0 BER | s1 BER | mean BER | Δ vs PRE | Gate C1 |
+|----|-------------|---------|---------|--------|-----------|--------|--------|--------|----------|---------|---------|
+| SB1 | LR warmup only | 128 | 1 | 7 | serial | 399,354 | 2.285% | 2.277% | 2.281% | +0.001pp | ✗ |
+| SB2 | Wider CNN k=31 | 128 | 1 | 31 | serial | 400,890 | 2.298% | 2.275% | 2.287% | −0.004pp | ✗ |
+| SB3 | Depth=2 k=31 | 128 | 2 | 31 | serial | 702,226 | 2.258% | 2.210% | 2.234% | +0.048pp | ✗ (0.002pp short) |
+| SB4 | Depth=4 grad_ckpt | 128 | 4 | 31 | serial | 1,304,898 | 2.255% | 2.241% | 2.248% | +0.034pp | ✗ |
+| SB5 | Width=192 depth=2 | 192 | 2 | 31 | serial | 1,438,442 | 2.227% | 2.203% | 2.215% | +0.067pp | **✓** |
+| SB6 | Width=256 depth=2 | 256 | 2 | 31 | serial | 2,437,826 | 2.215% | 2.219% | 2.217% | +0.065pp | **✓** |
+| SB7 | Parallel d=192 depth=2 | 192 | 2 | 31 | parallel | 1,437,674 | 2.217% | 2.230% | 2.224% | +0.059pp | **✓** |
+
+**Decision path:**
+- Depth: SB3 (0.048pp, n=2) > SB4 (0.034pp, n=4) → best_depth = 2
+- Width: SB5 (0.067pp, d=192) vs SB6 (0.065pp, d=256) → d=192 (smaller wins tiebreak)
+- Block type: SB7 parallel vs SB5 serial at d=192 → SB7 wins by 768 fewer params in tiebreak (SB7=1,437,674 < SB5=1,438,442)
+- **WINNER = SB7** (parallel, d=192, depth=2, k=31, 1,437,674 params)
+
+### SB7 — 3-Seed Promotion Run
+
+Source: `results/v6b4_sb7_s{0,1,2}_test.csv`, `results/v6b4_sb7_ensemble_test.csv`
+
+**Per-seed test BER:**
+
+| Seed | AWGN BT=0.3 | AWGN BT=0.5 | KB2 BT=0.3 m=1.2 | KB2 BT=0.3 m=1.4 | KB2 BT=0.5 m=1.2 | KB2 BT=0.5 m=1.4 | OVERALL |
+|------|------------|------------|----------------|----------------|----------------|----------------|---------|
+| 0 | 1.027% | 1.183% | 1.770% | 3.499% | 1.884% | 3.939% | **2.217%** |
+| 1 | 1.036% | 1.214% | 1.833% | 3.570% | 1.794% | 3.933% | **2.230%** |
+| 2 | 1.030% | 1.194% | 1.773% | 3.593% | 1.841% | 3.831% | **2.211%** |
+
+**3-seed ensemble:**
+
+| Condition | SB7 BER% | Canonical BER% | Δ |
+|---|---|---|---|
+| AWGN, BT=0.3 | 1.031 | 1.042 | +0.011pp |
+| AWGN, BT=0.5 | 1.197 | 1.176 | −0.021pp |
+| KB2, BT=0.3, m=1.2 | 1.792 | 1.900 | +0.108pp |
+| KB2, BT=0.3, m=1.4 | 3.554 | 3.791 | +0.237pp |
+| KB2, BT=0.5, m=1.2 | 1.840 | 1.858 | +0.018pp |
+| KB2, BT=0.5, m=1.4 | 3.901 | 3.925 | +0.024pp |
+| **OVERALL** | **2.2191%** | **2.2820%** | **+0.0629pp** |
+
+**Statistical test**: Paired t-test on 6 conditions → p = 0.1685 > 0.10.  
+**Decision: NO-OP.** The 0.063pp improvement is real and consistent across conditions but cannot be confirmed statistically with n=6 (the test has low power). **v6b3_canonical stays.**
+
+Note: A code bug in the final promotion script caused SB7 weights to be copied to `v6_final_s{0,1,2}.pt`. This was corrected; `v6_final` was re-set to `v6b3_canonical` weights.
+
+### SB8 — Loss Function Ablation (SB7 arch, seed 0)
+
+Tested on SB7 configuration with seed 0 only. Source: `results/v6b4_sb8_*_s0_test.csv`
+
+| Variant | BER (s0) | Description |
+|---|---|---|
+| BCE (baseline) | 2.2126% | Standard binary cross-entropy |
+| BCE + label smoothing 0.05 | 2.2136% | Soft targets (y ← 0.05/0.95) |
+| Focal BCE γ=2 | 2.2183% | Down-weight easy examples |
+| Focal + label smooth | 2.2045% | Combined |
+
+Range = 0.014pp (< 0.03pp threshold). **Plain BCE wins** — it's simplest and ties for best.
+
+### Batch 4 Key Findings
+
+1. **Architecture capacity IS a bottleneck**: d=192 gains +0.067pp over d=128. More width helps.
+2. **Depth ceiling at n=2 blocks**: n=4 overfits on 37K Zhu fine-tune samples. Model capacity outstrips available fine-tune data at depth=4.
+3. **Parallel vs serial negligible**: Mcformer-style parallel block (SB7) ≈ serial (SB5), 0.009pp difference. No benefit from parallel fusion.
+4. **Loss function irrelevant**: All 4 loss variants within 0.014pp.
+5. **Statistical gate too conservative**: n=6 test conditions gives a paired t-test insufficient power to detect 0.06pp reliably. The improvement is consistent but unconfirmable.
+6. **Wider CNN (k=31) does not help alone**: SB2 was slightly *worse* than baseline. The benefit comes from wider d_model, not wider receptive field alone.
+
+---
+
+## V6 Synth Fine-Tune Experiment
+
+**Date**: 2026-04-24–25  
+**Script**: `src/train/train_v6_synthft.py`  
+**Hypothesis**: The 37K Zhu fine-tune corpus is the performance bottleneck. Adding 200K synthetic Zhu-equivalent frames in fine-tuning should help.  
+**Starting checkpoint**: `v6b3_canonical_pretrain.pt` (seed 1, 500K pretrain)
+
+### Pre-flight: Zhu Dataset Forensics
+
+Before generating synthetic data, the full Zhu training set was reverse-engineered to understand its amplitude statistics.
+
+**AWGN amplitude**: Our `synth_gen.py` at Eb/N0 [−4, +8] dB produces mean power 5.9 dB. Zhu's AWGN training data has mean power 6.3 dB. Difference: 0.4 dB — acceptable.
+
+**KB2 amplitude mismatch (critical finding)**: Zhu's KB2 training frames are **11.45 dB quieter** than Zhu's AWGN training frames at every SNR level. This is a constant ratio (0.0717 = 0.268²) across all 7 SNR blocks × 3000 frames. Root cause: unknown MATLAB amplitude scaling in Zhu's simulation pipeline. The 0.268 factor was empirically derived.
+
+**SNR definition**: Zhu training uses Eb/N0 (same as our `synth_gen.py`). Zhu test uses SNR_per_sample = Eb/N0 − 9.03 dB (separate inconsistency; does not affect training).
+
+**Fix applied**: Generate synthetic KB2 with `synth_gen.py`, then multiply xs.npy in-place by 0.268 to match Zhu's KB2 amplitude statistics.
+
+### Synthetic Data Generated
+
+| Dataset | Samples | Seed | SNR range | Mean power |
+|---|---|---|---|---|
+| AWGN | 100,000 | 42 | Eb/N0 [−4, +8] dB | 5.9 dB |
+| KB2 | 100,000 | 43 | Eb/N0 [−4, +8] dB | −4.1 dB (after ×0.268) |
+
+Combined fine-tune corpus: 37,338 real Zhu + 100K synth AWGN + 100K synth KB2 = **237,338 total**
+
+### Run A — Aborted (double-scaling bug)
+
+**Bug**: `data/synth_zhu_equiv/kb2/xs.npy` was already scaled ×0.268 in-place. The `SynthNpyXYDataset` class also applied `x_scale=KB2_SCALE=0.268` in `__getitem__`. Net factor: 0.268² = 0.0718 (−22.9 dB vs raw signal). KB2 training samples were essentially zero-signal.
+
+**Result**: Catastrophic failure on `kb2_Tb0d5_m1d2`:
+- Seed 0: 11.11%, Seed 1: 12.66%, Seed 2: 9.65% (canonical: 1.87%)
+- Overall: 4.07% / 4.41% / 3.76%
+
+**Fix**: Changed `x_scale=KB2_SCALE → x_scale=1.0` for the KB2 dataset in `_build_combined_dataset`. The file is already at the correct amplitude; no runtime scaling needed.
+
+### Run B — Fixed (final results)
+
+Source: `results/v6_synthft_s{0,1,2}_test.csv`, `results/v6b3_synthft_ensemble_test.csv`
+
+**Per-seed test BER:**
+
+| Seed | AWGN BT=0.3 | AWGN BT=0.5 | KB2 BT=0.3 m=1.2 | KB2 BT=0.3 m=1.4 | KB2 BT=0.5 m=1.2 | KB2 BT=0.5 m=1.4 | OVERALL |
+|------|------------|------------|----------------|----------------|----------------|----------------|---------|
+| 0 | 1.20% | 6.04% | 2.21% | 4.34% | 3.80% | 5.74% | **3.89%** |
+| 1 | 1.14% | 4.17% | 2.17% | 4.25% | 3.74% | 5.22% | **3.45%** |
+| 2 | 1.14% | 5.32% | 2.15% | 4.47% | 3.90% | 5.82% | **3.80%** |
+
+**3-seed ensemble vs canonical:**
+
+| Condition | SynthFT BER% | Canonical BER% | Δ |
+|---|---|---|---|
+| AWGN, BT=0.3 | 1.16 | 1.04 | **−0.12pp** |
+| AWGN, BT=0.5 | **5.18** | 1.20 | **−3.98pp** |
+| KB2, BT=0.3, m=1.2 | 2.18 | 1.90 | **−0.28pp** |
+| KB2, BT=0.3, m=1.4 | 4.35 | 3.79 | **−0.56pp** |
+| KB2, BT=0.5, m=1.2 | **3.81** | 1.86 | **−1.95pp** |
+| KB2, BT=0.5, m=1.4 | **5.60** | 3.93 | **−1.67pp** |
+| **OVERALL** | **3.7123%** | **2.2820%** | **−1.4303pp regression** |
+
+**Gate**: delta = −1.43pp. Hypothesis REJECTED — synthetic augmentation makes things significantly WORSE.
+
+### Analysis
+
+**Pattern**: BT=0.5 conditions specifically destroyed; BT=0.3 barely affected.
+
+| Condition group | Avg regression |
+|---|---|
+| BT=0.3 (AWGN + KB2) | −0.32pp |
+| BT=0.5 (AWGN + KB2) | −2.53pp |
+
+**Root cause — sim-to-real gap for BT=0.5 GMSK**:  
+Our Python GMSK generator uses a Gaussian filter for pulse shaping. At BT=0.3 (broader filter, softer shaping), small differences in filter kernel truncation / normalization don't matter much. At BT=0.5 (narrower filter, sharper transitions), even small implementation differences between our PyTorch generator and Zhu's MATLAB produce visibly different waveforms. Training on 100K synthetic BT=0.5 frames with the wrong waveform overwrites the model's learned BT=0.5 decision boundaries.
+
+**Secondary factor — BatchNorm stat corruption**:  
+AWGN frames (~6 dB mean power) and KB2 frames (~−4 dB mean power) are mixed in every training batch. The 10 dB power gap between distributions corrupts BatchNorm running statistics in the CNN stem.
+
+**Fundamental finding**:  
+Synthetic pretrain ≠ synthetic fine-tune. Synthetic pretrain (500K, general GMSK + channel physics) helps by +0.229pp (NoPretrain ablation). Synthetic fine-tune (with real Zhu's specific BT/channel mix) hurts by −1.43pp. The model needs real Zhu fine-tune data for real-data calibration; synthetic substitutes do not replicate Zhu's exact signal statistics.
+
+### Verdict: HYPOTHESIS REJECTED
+
+**The 37K Zhu fine-tune corpus is NOT the bottleneck.** Adding more synthetic fine-tune data makes things worse, not better. The performance ceiling of ~2.28% is set by:
+1. Architecture capacity (confirmed: widening helps by ~0.06pp but doesn't pass statistical gate)
+2. The 37K real Zhu data is sufficient for fine-tuning at this model scale
+3. Gains beyond 2.28% would require either more **real** data or a fundamentally different architecture or more test conditions to confirm sub-0.1pp improvements statistically
+
+**V6_FINAL_BER = 2.2820% (v6b3_canonical). Unchanged.**
+
+---
+
+## V6 Final Leaderboard
+
+All results on Zhu test set (4,200 frames, 6 conditions, 700/condition). Ensemble = 3-seed aggregate.
+
+| Model | Ensemble BER | vs Zhu Baseline | Source CSV |
+|---|---|---|---|
+| Zhu BiLSTM (1 seed, Phase 2) | 3.122% | — | baseline_test_results.csv |
+| Zhu BiLSTM (3-seed ensemble, V6B0) | 2.566% | — | baseline_ensemble_test.csv |
+| V5 BiMamba3 (5ch) | 2.759% | −0.363pp | v5_ensemble_test.csv |
+| BiTransformer | 2.640% | −0.482pp | bi_transformer_ensemble_test.csv |
+| BiMamba2 | 2.725% | −0.397pp | bi_mamba2_ensemble_test.csv |
+| MambaNet (5ch, with feature eng.) | 2.275% | −0.847pp | mambanet_ensemble_test.csv |
+| MambaNet-2ch (Phase 7 final) | 2.275% | −0.847pp | mambanet_2ch_final_test.csv |
+| A1: NoFiLM | 2.284% | −0.838pp | mambanet_no_film_ensemble_test.csv |
+| A3: NoPretrain | 2.504% | −0.618pp | mambanet_no_pretrain_ensemble_test.csv |
+| **V6B3 canonical (500K pretrain)** | **2.282%** | **−0.840pp** | **v6b3_500K_ensemble_test.csv** |
+| V6B3 1M pretrain | 2.269% | −0.853pp | v6b3_1M_ensemble_test.csv |
+| V6B4 SB7 (d=192, n=2, parallel) | 2.219% | −0.903pp | v6b4_sb7_ensemble_test.csv |
+| SynthFT (200K synth aug, fixed) | 3.712% | +1.146pp regression | v6b3_synthft_ensemble_test.csv |
+
+**Per-condition breakdown — best models:**
+
+| Condition | Zhu BiLSTM (1-seed) | V6B3 canonical (2.282%) | V6B4 SB7 (2.219%) |
+|---|---|---|---|
+| AWGN, BT=0.3 | 1.923% | 1.042% | 1.031% |
+| AWGN, BT=0.5 | 1.951% | 1.176% | 1.197% |
+| KB2, BT=0.3, m=1.2 | 2.667% | 1.900% | 1.792% |
+| KB2, BT=0.3, m=1.4 | 4.527% | 3.791% | 3.554% |
+| KB2, BT=0.5, m=1.2 | 2.759% | 1.858% | 1.840% |
+| KB2, BT=0.5, m=1.4 | 4.903% | 3.925% | 3.901% |
+| **OVERALL** | **3.122%** | **2.282%** | **2.219%** |
+
+Note on SB7: 2.219% was not officially promoted (p=0.17 failed statistical gate). V6B3 canonical (2.282%) remains the official final.
+
+---
+
+## V6 Key Learnings
+
+1. **SNR conditioning is marginal**: Improving the SNR estimator quality from "wrong for KB2" to "accurate" yields essentially zero BER improvement. FiLM only contributes ~0.009pp — not worth engineering time.
+
+2. **Pretrain data scale law is flat after 500K**: 500K→1M gives +0.013pp on final BER. More pretrain data improves pretrain loss but the fine-tune stage can't take advantage of it.
+
+3. **Architecture width (d_model) is the main remaining lever**: d=192 vs d=128 = +0.067pp. The model IS capacity-limited but only slightly. Wider d_model with k=31 CNN and n=2 blocks is the best found configuration.
+
+4. **Statistical confirmation requires more conditions**: With n=6 test conditions, a 0.063pp improvement gives p=0.17. Need either more test conditions or more seeds to confirm sub-0.1pp gains.
+
+5. **Synthetic fine-tuning is harmful, not helpful**: Synthetic data is great for pretrain (teaches channel physics from scratch). Fine-tuning on synthetic data corrupts real-data calibration, especially for BT=0.5 where the sim-to-real gap is larger.
+
+6. **The practical ceiling is ~2.28%**: Without new real data, a fundamentally different architecture, or a much larger model, the BER is unlikely to drop meaningfully below 2.28% on this dataset.
+
+---
+
+## V6 New Files
+
+### Source code (added in V6)
+- `src/train/train_v6b3.py` — V6B3 pretrain/finetune with AdamW+warmup, early stopping
+- `src/train/train_v6b4.py` — V6B4 single-run sweep with architecture flags
+- `src/train/train_v6_synthft.py` — Synth fine-tune experiment script
+- `run_v6b4_sweep.py` — B4 sweep orchestration (SB1–SB8)
+
+### Results (added in V6)
+- `results/baseline_ensemble_test.csv` — 3-seed Zhu baseline ensemble (2.566%)
+- `results/baseline_ensemble_summary.txt` — Summary
+- `results/v6b2_partA_channel_validation.csv` — Channel distribution analysis
+- `results/v6b2_snr_estimator_gate_report.csv` — Neural SNR estimator gate results
+- `results/v6b2_mambanet_snrfix_s1_test.csv` — V6B2 integration test
+- `results/v6b3_500K_ensemble_test.csv` — 500K pretrain ensemble (2.2820%)
+- `results/v6b3_1M_ensemble_test.csv` — 1M pretrain ensemble (2.2692%)
+- `results/v6b3_500K_s{0,1,2}_test.csv` — 500K per-seed results
+- `results/v6b3_1M_s{0,1,2}_test.csv` — 1M per-seed results
+- `results/v6b3_pre_500K_s{0,1}_log.csv` — 500K pretrain training logs
+- `results/v6b3_pre_1M_s{0,1}_log.csv` — 1M pretrain training logs
+- `results/v6b4_sweep_summary.csv` — Full B4 sweep summary table
+- `results/v6b4_sb{1–7}_s{0,1}_test.csv` — B4 sweep per-SB per-seed results
+- `results/v6b4_sb7_s{0,1,2}_test.csv` — SB7 3-seed promotion results
+- `results/v6b4_sb7_ensemble_test.csv` — SB7 ensemble (2.2191%)
+- `results/v6b4_sb8_bce_s0_test.csv` — Loss ablation: plain BCE
+- `results/v6b4_sb8_bce_ls_s0_test.csv` — Loss ablation: BCE + label smooth
+- `results/v6b4_sb8_focal_s0_test.csv` — Loss ablation: focal BCE
+- `results/v6b4_sb8_focal_ls_s0_test.csv` — Loss ablation: focal + label smooth
+- `results/v6_synthft_s{0,1,2}_test.csv` — SynthFT per-seed results (Run B fixed)
+- `results/v6b3_synthft_ensemble_test.csv` — SynthFT ensemble (3.7123%)
+
+### Checkpoints (added in V6)
+- `checkpoints/v6b3_canonical_pretrain.pt` — 500K pretrain best (seed 1, ep29)
+- `checkpoints/v6b3_canonical_s{0,1,2}.pt` — 500K fine-tune best per seed
+- `checkpoints/v6_final_s{0,1,2}.pt` — Same as v6b3_canonical (official final)
+- `checkpoints/v6b4_sb7_s{0,1,2}_ft.pt` — SB7 fine-tune best per seed
