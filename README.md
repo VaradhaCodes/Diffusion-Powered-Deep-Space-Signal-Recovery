@@ -2,8 +2,6 @@
 
 **Replicating and improving on Zhu et al. (Radio Science, 2023) using a hybrid Attention + Mamba-2 architecture.**
 
-ECE205 - Electromagnetic Engineering Project
-
 ---
 
 <p align="center">
