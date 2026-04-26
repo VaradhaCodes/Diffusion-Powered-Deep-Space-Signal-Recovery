@@ -38,3 +38,13 @@ Thumbs.db
 CLAUDE.md
 PHASE*.md
 PROMPT*.md
+
+# AI run prompts / batch instructions
+V6 Batch*.md
+V6_Batch*.md
+
+# Large datasets (12GB+)
+data/
+
+# Windows Zone.Identifier metadata
+*Zone.Identifier
